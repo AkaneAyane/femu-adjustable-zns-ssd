@@ -256,6 +256,8 @@ static void set_pos(void *a, size_t pos)
     ((NvmeRequest *)a)->pos = pos;
 }
 
+
+//创建poller函数
 void nvme_create_poller(FemuCtrl *n)
 {
 

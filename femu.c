@@ -462,8 +462,12 @@ static void nvme_init_cmb(FemuCtrl *n)
                           NVME_CMBSZ_GETSIZE(n->bar.cmbsz));
     pci_register_bar(&n->parent_obj, NVME_CMBLOC_BIR(n->bar.cmbloc),
                      PCI_BASE_ADDRESS_SPACE_MEMORY |
-                     PCI_BASE_ADDRESS_MEM_TYPE_64, &n->ctrl_mem); }
+                     PCI_BASE_ADDRESS_MEM_TYPE_64, &n->ctrl_mem);
+}
 
+
+
+//初始化pci部分，与传输时间模拟有一定的关系
 static void nvme_init_pci(FemuCtrl *n)
 {
     uint8_t *pci_conf = n->parent_obj.config;
@@ -528,9 +532,10 @@ static int nvme_register_extensions(FemuCtrl *n)
 
     return 0;
 }
-
+//实现初始化一个femu设备的入口点
 static void femu_realize(PCIDevice *pci_dev, Error **errp)
 {
+    //宏定义转换
     FemuCtrl *n = FEMU(pci_dev);
     int64_t bs_size;
     #ifdef INHOINNO_VERBOSE_SETTING
@@ -542,35 +547,36 @@ static void femu_realize(PCIDevice *pci_dev, Error **errp)
         return;
     }
 
-    bs_size = ((int64_t)n->memsz) * 1024 * 1024;
-
+    bs_size = ((int64_t)n->memsz) * 1024 * 1024;    //通过占用的memory空间来计算块的总大小，原始单位应该是MB？转换为了B
+    //初始化dram模拟的后端memory部分
     init_dram_backend(&n->mbe, bs_size);
-    n->mbe->femu_mode = n->femu_mode;
+    n->mbe->femu_mode = n->femu_mode;   //mbe的模式与n保持相同
 
     n->completed = 0;
     n->start_time = time(NULL);
     n->reg_size = pow2ceil(0x1004 + 2 * (n->num_io_queues + 1) * 4);
-    n->ns_size = bs_size / (uint64_t)n->num_namespaces;
+    n->ns_size = bs_size / (uint64_t)n->num_namespaces;     //计算每个namespace的大小
 
     /* Coperd: [1..num_io_queues] are used as IO queues */
+    //申请num_io_queues+1的长度作为数组大小，从而可以直接使用1到num_io_queues的下标来访问
     n->sq = g_malloc0(sizeof(*n->sq) * (n->num_io_queues + 1));
     n->cq = g_malloc0(sizeof(*n->cq) * (n->num_io_queues + 1));
-    n->namespaces = g_malloc0(sizeof(*n->namespaces) * n->num_namespaces);
-    n->elpes = g_malloc0(sizeof(*n->elpes) * (n->elpe + 1));
-    n->aer_reqs = g_malloc0(sizeof(*n->aer_reqs) * (n->aerl + 1));
+    n->namespaces = g_malloc0(sizeof(*n->namespaces) * n->num_namespaces);      //申请namespaces数组空间
+    n->elpes = g_malloc0(sizeof(*n->elpes) * (n->elpe + 1));        //申请elpes数组空间
+    n->aer_reqs = g_malloc0(sizeof(*n->aer_reqs) * (n->aerl + 1));      //申请aer_reqs数组空间
     n->features.int_vector_config = g_malloc0(sizeof(*n->features.int_vector_config) * (n->num_io_queues + 1));
 
-    nvme_init_pci(n);
-    nvme_init_ctrl(n);
-    nvme_init_namespaces(n, errp);
+    nvme_init_pci(n);   //初始化pci信息
+    nvme_init_ctrl(n);      //初始其他控制信息
+    nvme_init_namespaces(n, errp);      //初始化namespaces的空间
 
     nvme_register_extensions(n);
-
+    //如果在 nvme_register_extensions(n)对初始化函数进行了赋值，那么就会调用
     if (n->ext_ops.init) {
         n->ext_ops.init(n, errp);
     }
 }
-
+//释放nvme poller,目前不是很理解
 static void nvme_destroy_poller(FemuCtrl *n)
 {
     femu_debug("Destroying NVMe poller !!\n");
@@ -614,7 +620,7 @@ static void femu_exit(PCIDevice *pci_dev)
         memory_region_unref(&n->ctrl_mem);
     }
 }
-
+//脚本启动的参数所在的地方
 static Property femu_props[] = {
     DEFINE_PROP_STRING("serial", FemuCtrl, serial),
     DEFINE_PROP_UINT32("devsz_mb", FemuCtrl, memsz, 1024), /* in MB */

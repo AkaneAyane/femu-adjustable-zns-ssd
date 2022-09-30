@@ -967,7 +967,7 @@ enum NvmeIdNsDps {
     DPS_FIRST_EIGHT = 8,
 };
 
-//辅助开发者修改后的检查函数
+//运行前辅助开发者修改后的检查函数
 static inline void nvme_check_size(void)
 {
     QEMU_BUILD_BUG_ON(sizeof(NvmeAerResult) != 4);

@@ -378,6 +378,8 @@ static void ssd_init_rmap(struct ssd *ssd)
     }
 }
 
+
+//黑盒ssd的实质初始化函数
 void ssd_init(FemuCtrl *n)
 {
     struct ssd *ssd = n->ssd;

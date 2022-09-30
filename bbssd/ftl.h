@@ -7,6 +7,7 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+//基础NAND操作相关的参数
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -17,11 +18,14 @@ enum {
     NAND_ERASE_LATENCY= 2000000,
 };
 
+//区分用户IO和GC IO
 enum {
     USER_IO = 0,
     GC_IO = 1,
 };
 
+
+//page和section（？)的状态
 enum {
     SEC_FREE = 0,
     SEC_INVALID = 1,
@@ -31,7 +35,7 @@ enum {
     PG_INVALID = 1,
     PG_VALID = 2
 };
-
+//是否允许GC延迟，是否允许延迟模拟
 enum {
     FEMU_ENABLE_GC_DELAY = 1,
     FEMU_DISABLE_GC_DELAY = 2,
@@ -45,6 +49,7 @@ enum {
 };
 
 
+//当前模式下把64位的物理页地址进行如下的映射
 #define BLK_BITS    (16)
 #define PG_BITS     (16)
 #define SEC_BITS    (8)
@@ -69,45 +74,52 @@ struct ppa {
     };
 };
 
+
 typedef int nand_sec_status_t;
 
+
+//用于描述访问到nand page的信息
 struct nand_page {
     nand_sec_status_t *sec;
     int nsecs;
     int status;
 };
 
+//用于描述nand block的信息
 struct nand_block {
-    struct nand_page *pg;
-    int npgs;
+    struct nand_page *pg; //应该是page数组
+    int npgs;   //page页数
     int ipc; /* invalid page count */
     int vpc; /* valid page count */
-    int erase_cnt;
+    int erase_cnt;  //擦除次数
     int wp; /* current write pointer */
 };
-
+//用于描述nand plane结构
 struct nand_plane {
-    struct nand_block *blk;
-    int nblks;
+    struct nand_block *blk; //block数组
+    int nblks;  //block个数
 };
-
+//用于描述 nand logical unit (die，也可能作为chip的抽象)
 struct nand_lun {
-    struct nand_plane *pl;
-    int npls;
-    uint64_t next_lun_avail_time;
-    bool busy;
-    uint64_t gc_endtime;
+    struct nand_plane *pl;      //plane数组
+    int npls;       // plane个数
+    uint64_t next_lun_avail_time;   //die作为可以产生并行性的单位，需要记录下一次的可访问时间
+    bool busy;      //当前是否繁忙
+    uint64_t gc_endtime;        //gc结束时间
 };
-
+//用于描述ssd内部的channel
 struct ssd_channel {
-    struct nand_lun *lun;       //logical unit
-    int nluns;
-    uint64_t next_ch_avail_time;
-    bool busy;
-    uint64_t gc_endtime;
+    struct nand_lun *lun;       //logical unit数组
+    int nluns;  //logical unit个数
+    uint64_t next_ch_avail_time;    //记录下一次的可访问时间
+    bool busy;  //当前是否繁忙
+    uint64_t gc_endtime;    //gc结束时间
 };
 
+
+//与一个黑盒ssd相关的参数
 struct ssdparams {
+    //基本参数
     int secsz;        /* sector size in bytes */
     int secs_per_pg;  /* # of sectors per page */
     int pgs_per_blk;  /* # of NAND pages per block */
@@ -115,21 +127,21 @@ struct ssdparams {
     int pls_per_lun;  /* # of planes per LUN (Die) */
     int luns_per_ch;  /* # of LUNs per channel */
     int nchs;         /* # of channels in the SSD */
-
+    //延迟信息
     int pg_rd_lat;    /* NAND page read latency in nanoseconds */
     int pg_wr_lat;    /* NAND page program latency in nanoseconds */
     int blk_er_lat;   /* NAND block erase latency in nanoseconds */
     int ch_xfer_lat;  /* channel transfer latency for one page in nanoseconds
                        * this defines the channel bandwith
                        */
+    //gc 参数
+    double gc_thres_pcent;  //触发gc的page门限值？
+    int gc_thres_lines;     //触发gc的line门限值？
+    double gc_thres_pcent_high;     //gc page门限值高水位？
+    int gc_thres_lines_high;        //gc line门限值高水位？
+    bool enable_gc_delay;           //是否开启gc延迟
 
-    double gc_thres_pcent;
-    int gc_thres_lines;
-    double gc_thres_pcent_high;
-    int gc_thres_lines_high;
-    bool enable_gc_delay;
-
-    /* below are all calculated values */
+    /* below are all calculated values;通过计算可以获得的值*/
     int secs_per_blk; /* # of sectors per block */
     int secs_per_pl;  /* # of sectors per plane */
     int secs_per_lun; /* # of sectors per LUN */
@@ -156,6 +168,7 @@ struct ssdparams {
     int tt_luns;      /* total # of LUNs in the SSD */
 };
 
+//ssd中的line概念?
 typedef struct line {
     int id;  /* line id, the same as corresponding block id */
     int ipc; /* invalid page count in this line */
@@ -194,6 +207,7 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+//黑盒SSD结构
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
