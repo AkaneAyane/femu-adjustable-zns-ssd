@@ -4,21 +4,23 @@
 
 static void *ftl_thread(void *arg);
 
+//是否需要进行gc
 static inline bool should_gc(struct ssd *ssd)
 {
+    //当可用line的数量小于门限时需要进行gc
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines);
 }
-
+//是否需要进行gc 高水位
 static inline bool should_gc_high(struct ssd *ssd)
 {
     return (ssd->lm.free_line_cnt <= ssd->sp.gc_thres_lines_high);
 }
-
+//从逻辑页序号，序曲实际的的物理页地址结构体
 static inline struct ppa get_maptbl_ent(struct ssd *ssd, uint64_t lpn)
 {
     return ssd->maptbl[lpn];
 }
-
+//设置逻辑页序号到实际物理页结构体的映射
 static inline void set_maptbl_ent(struct ssd *ssd, uint64_t lpn, struct ppa *ppa)
 {
     ftl_assert(lpn < ssd->sp.tt_pgs);
@@ -490,15 +492,16 @@ static inline struct nand_page *get_pg(struct ssd *ssd, struct ppa *ppa)
     struct nand_block *blk = get_blk(ssd, ppa);
     return &(blk->pg[ppa->g.pg]);
 }
-
+//ssd的状态推进，只涉及到模拟时延迟的推进，而不涉及到真正的物理时延
 static uint64_t ssd_advance_status(struct ssd *ssd, struct ppa *ppa, struct
-        nand_cmd *ncmd)//ssd 推进状态
+        nand_cmd *ncmd)
 {
     int c = ncmd->cmd;
     uint64_t cmd_stime = (ncmd->stime == 0) ? \
         qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : ncmd->stime;
     uint64_t nand_stime;
     struct ssdparams *spp = &ssd->sp;
+    //获取lun结构
     struct nand_lun *lun = get_lun(ssd, ppa);
 #if ADVANCE_PER_CH_ENDTIME
     struct ssd_channel *ch = get_ch(ssd, ppa);
@@ -913,6 +916,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
+//执行ftl的线程的实际执行函数，在ssd初始化时会创建该函数
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -922,7 +926,7 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
     /*FIXME : inhoinno: set "always GC"*/
-
+    //直到dataplane_started_ptr变为true之后才可以继续
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
     }
@@ -933,17 +937,21 @@ static void *ftl_thread(void *arg)
 
     while (1) {
         for (i = 1; i <= n->num_poller; i++) {
+            //如果为空或者femu_ring_count为0
             if (!ssd->to_ftl[i] || !femu_ring_count(ssd->to_ftl[i]))
                 continue;
-
+            //从ftl ring中取出一个request
             rc = femu_ring_dequeue(ssd->to_ftl[i], (void *)&req, 1);
             if (rc != 1) {
                 printf("FEMU: FTL to_ftl dequeue failed\n");
             }
-            ssd->sp.enable_gc_delay=true;
             ftl_assert(req);
-            if(!ssd->sp.enable_gc_delay)
+            {
+                //可能是调试作用
+                ssd->sp.enable_gc_delay=true;
+                if(!ssd->sp.enable_gc_delay)
                 // femu_err("In FTL.c :937 ssd->sp.enable_gc_delay=false, to inhoinno");
+            }
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
@@ -961,8 +969,9 @@ static void *ftl_thread(void *arg)
                 //ftl_err("FTL received unkown request type, ERROR\n");
                 ;
             }
-
+            //记录实际延迟
             req->reqlat = lat;
+            //更新结束时间
             req->expire_time += lat;
 
             rc = femu_ring_enqueue(ssd->to_poller[i], (void *)&req, 1);

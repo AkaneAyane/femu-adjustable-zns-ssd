@@ -25,7 +25,7 @@ void free_dram_backend(SsdDramBackend *b)
         g_free(b->logical_space);
     }
 }
-
+//后端实际读写过程,is_write表示是否为写命令，与qsg指定的地址进行交互
 int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write)
 {
     int sg_cur_index = 0;
@@ -33,7 +33,7 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
     dma_addr_t cur_addr, cur_len;
     uint64_t mb_oft = lbal[0];
     void *mb = b->logical_space;
-
+    //方向
     DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
 
     if (is_write) {
@@ -43,6 +43,7 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
     while (sg_cur_index < qsg->nsg) {
         cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
         cur_len = qsg->sg[sg_cur_index].len - sg_cur_byte;
+        //实际的数据读写操作
         if (dma_memory_rw(qsg->as, cur_addr, mb + mb_oft, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
             error_report("FEMU: dma_memory_rw error");
         }
@@ -64,7 +65,7 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
         }
     }
 
-    qemu_sglist_destroy(qsg);
+    qemu_sglist_destroy(qsg);   //回收qsg资源
 
     return 0;
 }

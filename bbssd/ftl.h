@@ -57,7 +57,7 @@ enum {
 #define LUN_BITS    (8)
 #define CH_BITS     (7)
 
-/* describe a physical page addr */
+/*用于描述一个物理页地址*/
 struct ppa {
     union {
         struct {
@@ -178,9 +178,12 @@ typedef struct line {
     size_t                  pos;
 } line;
 
-/* wp: record next write addr */
+
+
+/* wp: record next write addr,记录了下一个可写的地址信息*/
 struct write_pointer {
-    struct line *curline;
+    struct line *curline;   //当前的line
+    //其他的单位号？
     int ch;
     int lun;
     int pg;
@@ -201,9 +204,11 @@ struct line_mgmt {
     int full_line_cnt;
 };
 
+
+//nand 指令
 struct nand_cmd {
-    int type;
-    int cmd;
+    int type;       //可以区分是USER IO还是GC IO
+    int cmd;        //可以取值NAND_READ，NAND_WRITE,NAND_ERASE等
     int64_t stime; /* Coperd: request arrival time */
 };
 
@@ -212,10 +217,10 @@ struct ssd {
     char *ssdname;
     struct ssdparams sp;
     struct ssd_channel *ch;
-    struct ppa *maptbl; /* page level mapping table */
+    struct ppa *maptbl; /* page level mapping table;ppa结构数组，从下标定位到ppa？*/
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
-    struct line_mgmt lm;
+    struct line_mgmt lm;    //line管理？
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

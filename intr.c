@@ -192,6 +192,7 @@ void nvme_isr_notify_io(void *opaque)
     nvme_isr_notify_legacy(opaque);
 }
 
+//设置msix虚拟队列
 int nvme_setup_virq(FemuCtrl *n, NvmeCQueue *cq)
 {
     int ret;

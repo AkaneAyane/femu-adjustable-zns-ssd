@@ -2,6 +2,7 @@
 
 static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req);
 
+//更新sq的eventidx部分
 static void nvme_update_sq_eventidx(const NvmeSQueue *sq)
 {
     if (sq->eventidx_addr_hva) {
@@ -14,7 +15,7 @@ static void nvme_update_sq_eventidx(const NvmeSQueue *sq)
                         sizeof(sq->tail));
     }
 }
-
+//通过直接内存拷贝的方式进行
 static inline void nvme_copy_cmd(NvmeCmd *dst, NvmeCmd *src)
 {
 #if defined(__AVX__)
@@ -35,7 +36,8 @@ static inline void nvme_copy_cmd(NvmeCmd *dst, NvmeCmd *src)
     *dst = *src;
 #endif
 }
-
+//命令提交源码，用于更新门铃寄存器sq_head_db，并且生成nvme_io_cmd
+//注意实际的io读写和延时模拟是分开的
 static void nvme_process_sq_io(void *opaque, int index_poller)
 {
     NvmeSQueue *sq = opaque;
@@ -45,33 +47,35 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
     NvmeCmd cmd;
     NvmeRequest *req;
     int processed = 0;
-
+    //更新sq尾指针值
     nvme_update_sq_tail(sq);
+    //反复从sq中取
     while (!(nvme_sq_empty(sq))) {
-        if (sq->phys_contig) {
+        if (sq->phys_contig) {  //如果物理连续存放，直接计算得到地址值
             addr = sq->dma_addr + sq->head * n->sqe_size;
             nvme_copy_cmd(&cmd, (void *)&(((NvmeCmd *)sq->dma_addr_hva)[sq->head]));
-        } else {
+        } else {    //如果不连续存放，通过以下函数计算得到地址
             addr = nvme_discontig(sq->prp_list, sq->head, n->page_size,
                                   n->sqe_size);
-            nvme_addr_read(n, addr, (void *)&cmd, sizeof(cmd));
+            nvme_addr_read(n, addr, (void *)&cmd, sizeof(cmd)); //通过读取方式得到command
         }
-        nvme_inc_sq_head(sq);
+        nvme_inc_sq_head(sq);   //更新头指针
 
-        req = QTAILQ_FIRST(&sq->req_list);
-        QTAILQ_REMOVE(&sq->req_list, req, entry);
-        memset(&req->cqe, 0, sizeof(req->cqe));
+        req = QTAILQ_FIRST(&sq->req_list);      //sq从req list里取出一个请求？
+        QTAILQ_REMOVE(&sq->req_list, req, entry);       //从list里移出这个请求
+        memset(&req->cqe, 0, sizeof(req->cqe));       //请求里的完成命令部分清0
         /* Coperd: record req->stime at earliest convenience */
-        req->expire_time = req->stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        req->cqe.cid = cmd.cid;
+        req->expire_time = req->stime = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);     //开始计时
+        req->cqe.cid = cmd.cid;                    //request相关赋值操作
         req->cmd_opcode = cmd.opcode;
         memcpy(&req->cmd, &cmd, sizeof(NvmeCmd));
 
         if (n->print_log) {
             femu_debug("%s,cid:%d\n", __func__, cmd.cid);
         }
-
+        //实际的数据io读写逻辑
         status = nvme_io_cmd(n, &cmd, req);
+        //实际读写完成后的ftl延迟模拟，将请求入队
         if (1 && status == NVME_SUCCESS) {
             req->status = status;
             int rc = femu_ring_enqueue(n->to_ftl[index_poller], (void *)&req, 1);
@@ -88,16 +92,16 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
         processed++;
     }
 
-    nvme_update_sq_eventidx(sq);
-    sq->completed += processed;
+    nvme_update_sq_eventidx(sq);        //更新eventidx寄存器
+    sq->completed += processed;         //添加完成字段
 }
-
+//nvme 完成队列加入命令完成消息
 static void nvme_post_cqe(NvmeCQueue *cq, NvmeRequest *req)
 {
     FemuCtrl *n = cq->ctrl;
     NvmeSQueue *sq = req->sq;
     NvmeCqe *cqe = &req->cqe;
-    uint8_t phase = cq->phase;
+    uint8_t phase = cq->phase;  //相位域
     hwaddr addr;
 
     if (n->print_log) {
@@ -107,17 +111,18 @@ static void nvme_post_cqe(NvmeCQueue *cq, NvmeRequest *req)
     cqe->sq_id = cpu_to_le16(sq->sqid);
     cqe->sq_head = cpu_to_le16(sq->head);
 
-    if (cq->phys_contig) {
+    if (cq->phys_contig) {      //如果物理连续，取得尾槽的地址
         addr = cq->dma_addr + cq->tail * n->cqe_size;
         ((NvmeCqe *)cq->dma_addr_hva)[cq->tail] = *cqe;
     } else {
         addr = nvme_discontig(cq->prp_list, cq->tail, n->page_size, n->cqe_size);
         nvme_addr_write(n, addr, (void *)cqe, sizeof(*cqe));
     }
-
+    //更新cq tail部分，并且修改相位字段
     nvme_inc_cq_tail(cq);
 }
 
+//处理一个cq条目的过程，并且处理真正的物理时延模拟
 static void nvme_process_cq_cpl(void *arg, int index_poller)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -128,7 +133,7 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
     uint64_t now;
     int processed = 0;
     int rc;
-
+    //bb会单独处理成poller？
     if (BBSSD(n)) { //|| ZNSSD(n)
         rp = n->to_poller[index_poller];
     }
@@ -139,24 +144,26 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
         if (rc != 1) {
             femu_err("dequeue from to_poller request failed\n");
         }
-        assert(req);
-
+        assert(req);    //断言指针非空
+        //加入到对应的pqueue中
         pqueue_insert( pq, req);
     }
-
+    //取出优先级最高的request，注意，没有pop
     while ((req = pqueue_peek(pq))) {
-        now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        if (now < req->expire_time) {
+        now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);   //获取当前时间
+        if (now < req->expire_time) {   //还没到结束时间
             break;
         }
 
         cq = n->cq[req->sq->sqid];
         if (!cq->is_active)
             continue;
+        //时延结束后向对应的cq加入完成命令消息
         nvme_post_cqe(cq, req);
         QTAILQ_INSERT_TAIL(&req->sq->req_list, req, entry);
+        //pq弹出本请求
         pqueue_pop(pq);
-        processed++;
+        processed++;    //处理数+1
         n->nr_tt_ios++;
         if (now - req->expire_time >= 20000) {
             n->nr_tt_late_ios++;
@@ -166,7 +173,8 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
                            n->nr_tt_late_ios, n->nr_tt_ios);
             }
         }
-        n->should_isr[req->sq->sqid] = true;
+
+        n->should_isr[req->sq->sqid] = true;    //本队列应该产生中断
     }
 
     if (processed == 0)
@@ -186,12 +194,13 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
         break;
     }
 }
-
+//nvme poller线程执行的函数，参数为NVmePollerThreadArgument，在poller里实际进行sq和cq的处理
 static void *nvme_poller(void *arg)
 {
     FemuCtrl *n = ((NvmePollerThreadArgument *)arg)->n;
     int index = ((NvmePollerThreadArgument *)arg)->index;
     int i=0;
+    //根据是否支持多poller
     switch (n->multipoller_enabled) {
     case 1:
         while (1) {
@@ -257,24 +266,25 @@ static void set_pos(void *a, size_t pos)
 }
 
 
-//创建poller函数
+//创建poller函数，用于生成需要使用到的poller
 void nvme_create_poller(FemuCtrl *n)
 {
-
+    //为每个queue申请一个bool变量
     n->should_isr = g_malloc0(sizeof(bool) * (n->num_io_queues + 1));
-
+    //是否允许多poller，如果是则每个队列一个;否则共用一个
     n->num_poller = n->multipoller_enabled ? n->num_io_queues : 1;
     /* Coperd: we put NvmeRequest into these rings */
+    //根据实际的poller数量，为to_ftl和to_poller申请rte_ring
     n->to_ftl = malloc(sizeof(struct rte_ring *) * (n->num_poller + 1));
     for (int i = 1; i <= n->num_poller; i++) {
         n->to_ftl[i] = femu_ring_create(FEMU_RING_TYPE_MP_SC, FEMU_MAX_INF_REQS);
-        if (!n->to_ftl[i]) {
+        if (!n->to_ftl[i]) {    //创建失败
             femu_err("failed to create ring (n->to_ftl) ...\n");
             abort();
         }
         assert(rte_ring_empty(n->to_ftl[i]));
     }
-
+    //与to_ftl的创建过程类似
     n->to_poller = malloc(sizeof(struct rte_ring *) * (n->num_poller + 1));
     for (int i = 1; i <= n->num_poller; i++) {
         n->to_poller[i] = femu_ring_create(FEMU_RING_TYPE_MP_SC, FEMU_MAX_INF_REQS);
@@ -284,7 +294,7 @@ void nvme_create_poller(FemuCtrl *n)
         }
         assert(rte_ring_empty(n->to_poller[i]));
     }
-
+    //创建pq指针数组，同样类似于上面
     n->pq = malloc(sizeof(pqueue_t *) * (n->num_poller + 1));
     for (int i = 1; i <= n->num_poller; i++) {
         n->pq[i] = pqueue_init(FEMU_MAX_INF_REQS, cmp_pri, get_pri, set_pri,
@@ -294,7 +304,7 @@ void nvme_create_poller(FemuCtrl *n)
             abort();
         }
     }
-
+    //创建poller，poller数量同样与num_poller保持一致
     n->poller = malloc(sizeof(QemuThread) * (n->num_poller + 1));
     NvmePollerThreadArgument *args = malloc(sizeof(NvmePollerThreadArgument) *
                                             (n->num_poller + 1));
@@ -306,44 +316,51 @@ void nvme_create_poller(FemuCtrl *n)
         femu_debug("nvme-poller [%d] created ...\n", i - 1);
     }
 }
-
+//nvme实际的读写操作
 uint16_t nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
 {
+    //获取参数信息
     NvmeRwCmd *rw = (NvmeRwCmd *)cmd;
     uint16_t ctrl = le16_to_cpu(rw->control);
     uint32_t nlb  = le16_to_cpu(rw->nlb) + 1;
     uint64_t slba = le64_to_cpu(rw->slba);
     uint64_t prp1 = le64_to_cpu(rw->prp1);
     uint64_t prp2 = le64_to_cpu(rw->prp2);
+    //获取lba_index
     const uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
+    //获得指定格式的ms部分
     const uint16_t ms = le16_to_cpu(ns->id_ns.lbaf[lba_index].ms);
+    //获得指定格式的data size部分，即每个数据块的大小（字节单位）
     const uint8_t data_shift = ns->id_ns.lbaf[lba_index].lbads;
+    //计算数据大小
     uint64_t data_size = (uint64_t)nlb << data_shift;
+    //计算byte地址
     uint64_t data_offset = slba << data_shift;
     uint64_t meta_size = nlb * ms;
     uint64_t elba = slba + nlb;
     uint16_t err;
     int ret;
-
+    //判定是否是写请求
     req->is_write = (rw->opcode == NVME_CMD_WRITE) ? 1 : 0;
-
+    //检查参数合理性，如果返回非0值，则失败
     err = femu_nvme_rw_check_req(n, ns, cmd, req, slba, elba, nlb, ctrl,
                                  data_size, meta_size);
     if (err)
         return err;
 
+    //prp映射，通过prp获取dma传输的数据块地址。如果返回值非0，进入错误处理阶段
     if (nvme_map_prp(&req->qsg, &req->iov, prp1, prp2, data_size, n)) {
         nvme_set_error_page(n, req->sq->sqid, cmd->cid, NVME_INVALID_FIELD,
                             offsetof(NvmeRwCmd, prp1), 0, ns->id);
         return NVME_INVALID_FIELD | NVME_DNR;
     }
-
+    //断言检查
     assert((nlb << data_shift) == req->qsg.size);
-
+    //赋值request部分
     req->slba = slba;
     req->status = NVME_SUCCESS;
     req->nlb = nlb;
-
+    //交付给backend memory进行实际的读写
     ret = backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
     if (!ret) {
         return NVME_SUCCESS;
@@ -441,6 +458,7 @@ static uint16_t nvme_compare(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     return NVME_SUCCESS;
 }
 
+//Nvme flush操作，未做实现
 static uint16_t nvme_flush(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req)
 {
@@ -480,7 +498,7 @@ static uint16_t nvme_write_uncor(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     return NVME_SUCCESS;
 }
-
+//处理nvme io指令
 static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
 {
     NvmeNamespace *ns;
@@ -525,7 +543,7 @@ static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
         }
         return NVME_INVALID_OPCODE | NVME_DNR;
     default:
-
+        //其他默认情况走了io_cmd里自定义的操作，注意这里包含了读写
         if (n->ext_ops.io_cmd) {
             return n->ext_ops.io_cmd(n, ns, cmd, req);
         }

@@ -1,10 +1,10 @@
 #include "./nvme.h"
-
+//检查sqid是否超过了FemuCtrl规定的队列数量，且对应id槽是否非空
 int nvme_check_sqid(FemuCtrl *n, uint16_t sqid)
 {
     return sqid <= n->num_io_queues && n->sq[sqid] != NULL ? 0 : -1;
 }
-
+//检查cqid是否超过了FemuCtrl规定的队列数量，且对应id槽是否非空
 int nvme_check_cqid(FemuCtrl *n, uint16_t cqid)
 {
     return cqid <= n->num_io_queues && n->cq[cqid] != NULL ? 0 : -1;
@@ -24,6 +24,7 @@ void nvme_inc_sq_head(NvmeSQueue *sq)
     sq->head = (sq->head + 1) % sq->size;
 }
 
+//从doorbell寄存器中获取最新的尾指针
 void nvme_update_sq_tail(NvmeSQueue *sq)
 {
     if (sq->db_addr_hva) {
@@ -104,6 +105,8 @@ void nvme_set_error_page(FemuCtrl *n, uint16_t sqid, uint16_t cid, uint16_t
     ++n->num_errors;
 }
 
+
+//检查rw请求中的参数合理性
 uint16_t femu_nvme_rw_check_req(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                                 NvmeRequest *req, uint64_t slba, uint64_t elba,
                                 uint32_t nlb, uint16_t ctrl, uint64_t data_size,
@@ -154,7 +157,7 @@ void nvme_free_sq(NvmeSQueue *sq, FemuCtrl *n)
         g_free(sq);
     }
 }
-
+//初始化一个提交队列，基本与cq完全相同
 uint16_t nvme_init_sq(NvmeSQueue *sq, FemuCtrl *n, uint64_t dma_addr, uint16_t
                       sqid, uint16_t cqid, uint16_t size, enum NvmeQueueFlags
                       prio, int contig)
@@ -180,15 +183,17 @@ uint16_t nvme_init_sq(NvmeSQueue *sq, FemuCtrl *n, uint64_t dma_addr, uint16_t
             return NVME_INVALID_FIELD | NVME_DNR;
         }
     }
-
+    //与cq不同的地方，申请了nvme请求数组的空间
     sq->io_req = g_malloc0(sq->size * sizeof(*sq->io_req));
+    //注意与cq不同的地方在于队列的类型有所不同
     QTAILQ_INIT(&sq->req_list);
     QTAILQ_INIT(&sq->out_req_list);
+    //并且进行了相关元素的初始化
     for (int i = 0; i < sq->size; i++) {
-        sq->io_req[i].sq = sq;
-        QTAILQ_INSERT_TAIL(&(sq->req_list), &sq->io_req[i], entry);
+        sq->io_req[i].sq = sq;  //每个nvmerequest关联sq
+        QTAILQ_INSERT_TAIL(&(sq->req_list), &sq->io_req[i], entry); //并且插入到req_list队列尾部，entry是连接的指针的字段名
     }
-
+    //优先级处理，根据不同的优先级设置arb_burst仲裁字段
     switch (prio) {
     case NVME_Q_PRIO_URGENT:
         sq->arb_burst = (1 << NVME_ARB_AB(n->features.arbitration));
@@ -204,7 +209,7 @@ uint16_t nvme_init_sq(NvmeSQueue *sq, FemuCtrl *n, uint64_t dma_addr, uint16_t
         sq->arb_burst = NVME_ARB_LPW(n->features.arbitration) + 1;
         break;
     }
-
+    //与cq相似的db和ei设置
     if (sqid && n->dbs_addr && n->eis_addr) {
         sq->db_addr = n->dbs_addr + 2 * sqid * dbbuf_entry_sz;
         sq->db_addr_hva = n->dbs_addr_hva + 2 * sqid * dbbuf_entry_sz;
@@ -215,13 +220,15 @@ uint16_t nvme_init_sq(NvmeSQueue *sq, FemuCtrl *n, uint64_t dma_addr, uint16_t
     }
 
     assert(n->cq[cqid]);
+    //在相关的cq的sq_list中插入新sq
     cq = n->cq[cqid];
     QTAILQ_INSERT_TAIL(&(cq->sq_list), sq, entry);
+    //设置槽位
     n->sq[sqid] = sq;
 
     return NVME_SUCCESS;
 }
-
+//nvme初始化一个完成队列
 uint16_t nvme_init_cq(NvmeCQueue *cq, FemuCtrl *n, uint64_t dma_addr, uint16_t
                       cqid, uint16_t vector, uint16_t size, uint16_t
                       irq_enabled, int contig)
@@ -234,27 +241,31 @@ uint16_t nvme_init_cq(NvmeCQueue *cq, FemuCtrl *n, uint64_t dma_addr, uint16_t
     cq->vector = vector;
     cq->head = cq->tail = 0;
     cq->phys_contig = contig;
-
+    //doorbell步长
     uint8_t stride = n->db_stride;
+    //默认情况紧密排布时长度为4，所以2+
     int dbbuf_entry_sz = 1 << (2 + stride);
+    //获取地址空间
     AddressSpace *as = pci_get_address_space(&n->parent_obj);
     dma_addr_t cqsz = (dma_addr_t)size;
 
+    //物理连续
     if (cq->phys_contig) {
         cq->dma_addr = dma_addr;
         cq->dma_addr_hva = (uint64_t)dma_memory_map(as, dma_addr, &cqsz, 1, MEMTXATTRS_UNSPECIFIED);
-    } else {
+    } else {//不连续
         cq->prp_list = nvme_setup_discontig(n, dma_addr, size,
                 n->cqe_size);
         if (!cq->prp_list) {
             return NVME_INVALID_FIELD | NVME_DNR;
         }
     }
-
+    //初始化两个队列
     QTAILQ_INIT(&cq->req_list);
     QTAILQ_INIT(&cq->sq_list);
+    //doorbell相关设置
     if (cqid && n->dbs_addr && n->eis_addr) {
-        cq->db_addr = n->dbs_addr + (2 * cqid + 1) * dbbuf_entry_sz;
+        cq->db_addr = n->dbs_addr + (2 * cqid + 1) * dbbuf_entry_sz;        //因为SQ和CQ紧密排布，所以取+1，同时也可以知cqid和sqid独立计算
         cq->db_addr_hva = n->dbs_addr_hva + (2 * cqid + 1) * dbbuf_entry_sz;
         cq->eventidx_addr = n->eis_addr + (2 * cqid + 1) * dbbuf_entry_sz;
         cq->eventidx_addr_hva = n->eis_addr_hva + (2 * cqid + 1) * dbbuf_entry_sz;
@@ -262,18 +273,23 @@ uint16_t nvme_init_cq(NvmeCQueue *cq, FemuCtrl *n, uint64_t dma_addr, uint16_t
                 cq->db_addr, cq->eventidx_addr);
     }
     msix_vector_use(&n->parent_obj, cq->vector);
+    //置于槽内
     n->cq[cqid] = cq;
 
     return NVME_SUCCESS;
 }
 
+//释放掉某一个完成队列
 void nvme_free_cq(NvmeCQueue *cq, FemuCtrl *n)
 {
+    //置空
     n->cq[cq->cqid] = NULL;
     msix_vector_unuse(&n->parent_obj, cq->vector);
+    //释放prp空间
     if (cq->prp_list) {
         g_free(cq->prp_list);
     }
+    //释放cq本体
     if (cq->cqid) {
         g_free(cq);
     }

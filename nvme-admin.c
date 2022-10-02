@@ -97,7 +97,7 @@ static uint16_t nvme_del_sq(FemuCtrl *n, NvmeCmd *cmd)
 
     return NVME_SUCCESS;
 }
-
+//创建提交队列命令,返回值直接对应着完成命令格式中的状态域，与CQ过程相似
 static uint16_t nvme_create_sq(FemuCtrl *n, NvmeCmd *cmd)
 {
     NvmeSQueue *sq;
@@ -108,24 +108,29 @@ static uint16_t nvme_create_sq(FemuCtrl *n, NvmeCmd *cmd)
     uint16_t qsize = le16_to_cpu(c->qsize);
     uint16_t qflags = le16_to_cpu(c->sq_flags);
     uint64_t prp1 = le64_to_cpu(c->prp1);
-
+    //如果cqid为0或者FemuCrtl状态不合法，返回错误码
     if (!cqid || nvme_check_cqid(n, cqid)) {
         return NVME_INVALID_CQID | NVME_DNR;
     }
+    //如果sqid为0或者FemuCrtl状态不合法，返回错误码
     if (!sqid || (sqid && !nvme_check_sqid(n, sqid))) {
         return NVME_INVALID_QID | NVME_DNR;
     }
+    //如果qsize值为0或者qsize超过了cap中的限制
     if (!qsize || qsize > NVME_CAP_MQES(n->bar.cap)) {
         return NVME_MAX_QSIZE_EXCEEDED | NVME_DNR;
     }
+    //相比cq,还检查了page_size与prp1的关系，目前不是很理解这个与运算的意思
     if (!prp1 || prp1 & (n->page_size - 1)) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
+    //判断qflags第1位 PC是否为0，如果为0且同时cap中的cqr为1则返回错误
     if (!(NVME_SQ_FLAGS_PC(qflags)) && NVME_CAP_CQR(n->bar.cap)) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
-
+    //分配队列
     sq = g_malloc0(sizeof(*sq));
+    //初始化
     if (nvme_init_sq(sq, n, prp1, sqid, cqid, qsize + 1,
                 NVME_SQ_FLAGS_QPRIO(qflags),
                 NVME_SQ_FLAGS_PC(qflags))) {
@@ -138,9 +143,10 @@ static uint16_t nvme_create_sq(FemuCtrl *n, NvmeCmd *cmd)
 
     return NVME_SUCCESS;
 }
-
+//创建完成队列命令,返回值直接对应着完成命令格式中的状态域
 static uint16_t nvme_create_cq(FemuCtrl *n, NvmeCmd *cmd)
 {
+    //取得指定格式参数
     NvmeCQueue *cq;
     NvmeCreateCq *c = (NvmeCreateCq *)cmd;
     uint16_t cqid = le16_to_cpu(c->cqid);
@@ -148,41 +154,46 @@ static uint16_t nvme_create_cq(FemuCtrl *n, NvmeCmd *cmd)
     uint16_t qsize = le16_to_cpu(c->qsize);
     uint16_t qflags = le16_to_cpu(c->cq_flags);
     uint64_t prp1 = le64_to_cpu(c->prp1);
-
+    //如果cqid为0或者FemuCrtl状态不合法，返回错误码
     if (!cqid || (cqid && !nvme_check_cqid(n, cqid))) {
         return NVME_INVALID_CQID | NVME_DNR;
     }
+    //如果qsize值为0或者qsize超过了cap中的限制
     if (!qsize || qsize > NVME_CAP_MQES(n->bar.cap)) {
         return NVME_MAX_QSIZE_EXCEEDED | NVME_DNR;
     }
+    //如果prp1为0（非法地址）
     if (!prp1) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
+    //如果中断向量vector的值超过队列数量？
     if (vector > n->num_io_queues) {
         return NVME_INVALID_IRQ_VECTOR | NVME_DNR;
     }
+    //判断qflags第1位 PC是否为0，如果为0且同时cap中的cqr为1则返回错误
     if (!(NVME_CQ_FLAGS_PC(qflags)) && NVME_CAP_CQR(n->bar.cap)) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
-
+    //如果已经有cq对应槽位已经存在了，那么释放掉
     if (n->cq[cqid] != NULL) {
         nvme_free_cq(n->cq[cqid], n);
     }
-
+    //分配一个完成队列
     cq = g_malloc0(sizeof(*cq));
     assert(cq != NULL);
+    //初始化完成队列，如果返回值非0，进入错误处理
     if (nvme_init_cq(cq, n, prp1, cqid, vector, qsize + 1,
                      NVME_CQ_FLAGS_IEN(qflags), NVME_CQ_FLAGS_PC(qflags))) {
         g_free(cq);
         return NVME_INVALID_FIELD | NVME_DNR;
     }
-
+    //设置虚拟队列
     nvme_setup_virq(n, cq);
 
     assert(cq->is_active == false);
-    cq->is_active = true;
+    cq->is_active = true;   //激活队列开始使用
 
-    return NVME_SUCCESS;
+    return NVME_SUCCESS;    //返回成功状态
 }
 
 static uint16_t nvme_del_cq(FemuCtrl *n, NvmeCmd *cmd)
@@ -205,7 +216,7 @@ static uint16_t nvme_del_cq(FemuCtrl *n, NvmeCmd *cmd)
 
     return NVME_SUCCESS;
 }
-
+//设置用于doorbell寄存器的内存部分，同时还会创建poller
 static uint16_t nvme_set_db_memory(FemuCtrl *n, const NvmeCmd *cmd)
 {
     uint64_t dbs_addr = le64_to_cpu(cmd->dptr.prp1);

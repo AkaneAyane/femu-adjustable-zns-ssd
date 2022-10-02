@@ -1,32 +1,36 @@
 #include "./nvme.h"
 
+//从地址中读取数据存放到buf中
 void nvme_addr_read(FemuCtrl *n, hwaddr addr, void *buf, int size)
 {
+    //如果支持cmb，且地址合法，则从cmb里读取
     if (n->cmbsz && addr >= n->ctrl_mem.addr &&
         addr < (n->ctrl_mem.addr + int128_get64(n->ctrl_mem.size))) {
         memcpy(buf, (void *)&n->cmbuf[addr - n->ctrl_mem.addr], size);
-    } else {
+    } else {    //通过pci直接读取数据
         pci_dma_read(&n->parent_obj, addr, buf, size);
     }
 }
-
+//向地址中写入buffer中的数据
 void nvme_addr_write(FemuCtrl *n, hwaddr addr, void *buf, int size)
 {
+    //如果支持cmb，且地址合法，则写入到cmb
     if (n->cmbsz && addr >= n->ctrl_mem.addr &&
         addr < (n->ctrl_mem.addr + int128_get64(n->ctrl_mem.size))) {
         memcpy((void *)&n->cmbuf[addr - n->ctrl_mem.addr], buf, size);
-    } else {
+    } else {    //通过pci直接写入数据
         pci_dma_write(&n->parent_obj, addr, buf, size);
     }
 }
 
+//prp1和prp2描述命令传输的数据，通过prp1和prp2来获取dma传输的数据块地址
 uint16_t nvme_map_prp(QEMUSGList *qsg, QEMUIOVector *iov, uint64_t prp1,
                       uint64_t prp2, uint32_t len, FemuCtrl *n)
 {
-    hwaddr trans_len = n->page_size - (prp1 % n->page_size);
+    hwaddr trans_len = n->page_size - (prp1 % n->page_size);     //一个page剩下的字节数？
     trans_len = MIN(len, trans_len);
-    int num_prps = (len >> n->page_bits) + 1;
-    bool cmb = false;
+    int num_prps = (len >> n->page_bits) + 1;       //计算
+    bool cmb = false;   //是否开启controller memory buffer
 
     if (!prp1) {
         return NVME_INVALID_FIELD | NVME_DNR;

@@ -215,6 +215,7 @@ void femu_ring_free(struct rte_ring *ring)
 	rte_ring_free((struct rte_ring *)ring);
 }
 
+//femu的封装，返回ring内元素数量
 size_t femu_ring_count(struct rte_ring *ring)
 {
 	return rte_ring_count((struct rte_ring *)ring);
@@ -224,7 +225,7 @@ size_t femu_ring_enqueue(struct rte_ring *ring, void **objs, size_t count)
 {
     return rte_ring_enqueue_bulk((struct rte_ring *)ring, objs, count, NULL);
 }
-
+//ring出队count个，存放在objs中，返回实际出队个数
 size_t femu_ring_dequeue(struct rte_ring *ring, void **objs, size_t count)
 {
 	return rte_ring_dequeue_burst((struct rte_ring *)ring, objs, count, NULL);
