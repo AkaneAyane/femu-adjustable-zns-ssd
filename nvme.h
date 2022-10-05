@@ -140,7 +140,7 @@ enum NvmeCapMask {
                                                            << CAP_MPSMIN_SHIFT)
 #define NVME_CAP_SET_MPSMAX(cap, val) (cap |= (uint64_t)(val & CAP_MPSMAX_MASK)\
                                                             << CAP_MPSMAX_SHIFT)
-enum NvmeCsi {
+enum NvmeCsi {  //NVme command set identifier
     NVME_CSI_NVM                = 0x00,
     NVME_CSI_ZONED              = 0x02,
 };
@@ -324,12 +324,12 @@ typedef struct NvmeCmd {
     uint16_t    fuse   : 2;     //融合两个命令为一条命令
     uint16_t    res1   : 4;
     uint16_t    psdt   : 2;     //PRP或SGL数据传输
-    uint16_t    cid;        //命令ID
-    uint32_t    nsid;       //命名空间ID
-    uint64_t    res2;       //保留的8字节
-    uint64_t    mptr;       //元数据指针
-    NvmeCmdDptr dptr;       //两个PRP表项
-    uint32_t    cdw10;      //剩下均为command double words 命令双字
+    uint16_t    cid;            //命令ID
+    uint32_t    nsid;           //命名空间ID
+    uint64_t    res2;           //保留的8字节
+    uint64_t    mptr;           //元数据指针
+    NvmeCmdDptr dptr;           //两个PRP表项
+    uint32_t    cdw10;          //剩下均为command double words 命令双字
     uint32_t    cdw11;
     uint32_t    cdw12;
     uint32_t    cdw13;
@@ -414,10 +414,10 @@ typedef struct NvmeCreateSq {
     uint32_t    rsvd1[5];
     uint64_t    prp1;
     uint64_t    rsvd8;
-    uint16_t    sqid;   //cdw10 前2字节    队列标识qid
-    uint16_t    qsize;   //cdw10 后2字节    队列大小
-    uint16_t    sq_flags;  //cdw11 前2字节    前2-15位表示保留（？）  第1-3位表示是队列优先级qprio，第0位表示是否物理连续（pc)
-    uint16_t    cqid;   //cdw11 后2字节    对应完成队列标识cqid？
+    uint16_t    sqid;       //cdw10 前2字节    队列标识qid
+    uint16_t    qsize;      //cdw10 后2字节    队列大小
+    uint16_t    sq_flags;   //cdw11 前2字节    前2-15位表示保留（？）  第1-3位表示是队列优先级qprio，第0位表示是否物理连续（pc)
+    uint16_t    cqid;       //cdw11 后2字节    对应完成队列标识cqid？
     uint32_t    rsvd12[4];
 } NvmeCreateSq;
 
@@ -459,13 +459,13 @@ typedef struct NvmeRwCmd {
     uint64_t    mptr;
     uint64_t    prp1;
     uint64_t    prp2;
-    uint64_t    slba;   //请求起始的逻辑块地址？31-0位存放在cdw10 ,63-32位存放在cdw11
-    uint16_t    nlb;        // cdw 12 的0-15位，逻辑块数量
+    uint64_t    slba;       //[start lba]请求起始的逻辑块地址？31-0位存放在cdw10 ,63-32位存放在cdw11
+    uint16_t    nlb;        //cdw 12 的0-15位，逻辑块数量
     uint16_t    control;    //控制部分 最高位（31）表示LR 是否重试读操作，30位表示数据提交到持久化介质，29-26为PRINFO保护信息，指定保护信息的行为和检查变量
     uint32_t    dsmgmt;     //31-8位保留，7-0为数据集管理dsm，用来描述被读的LBAs的属性，7位表示数据是否可压缩，6位表示请求是否顺序读，5-4表示请求延迟 ，3-0表示访问频率
-    uint32_t    reftag;     //EILBRT    逻辑块初始参考标记期望值
-    uint16_t    apptag;     //ELBAT 逻辑块应用标记
-    uint16_t    appmask;    //ELBATM 逻辑块应用标记掩码期望值
+    uint32_t    reftag;     //[EILBRT]    逻辑块初始参考标记期望值
+    uint16_t    apptag;     //[ELBAT] 逻辑块应用标记
+    uint16_t    appmask;    //[ELBATM] 逻辑块应用标记掩码期望值
 } NvmeRwCmd;
 
 enum {
@@ -826,11 +826,13 @@ enum NvmeIdCtrlLpa {
 
 
 //Nvme特性相关字段
+//https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-2.0b-2021.12.18-Ratified.pdf
+//https://nvmexpress.org/wp-content/uploads/NVM-Command-Set-Specification-1.0b-2021.12.18-Ratified.pdf
 typedef struct NvmeFeatureVal {
-    uint32_t    arbitration;    //优先级仲裁
+    uint32_t    arbitration;        //优先级仲裁
     uint32_t    power_mgmt;
     uint32_t    temp_thresh;
-    uint32_t    err_rec;
+    uint32_t    err_rec;            //[Error Recovery]p47 in "set spc"。控制错误恢复的特定属性，这些属性会被定义在CD11,会在DW0中回复
     uint32_t    volatile_wc;
     uint32_t    num_io_queues;
     uint32_t    int_coalescing;
@@ -849,7 +851,7 @@ typedef struct NvmeFeatureVal {
 #define NVME_INTC_THR(intc)     (intc & 0xff)
 #define NVME_INTC_TIME(intc)    ((intc >> 8) & 0xff)
 
-#define NVME_ERR_REC_DULBE(err_rec) (err_rec & 0x10000)
+#define NVME_ERR_REC_DULBE(err_rec) (err_rec & 0x10000) //判断第16位的值,第16位为DULBE
 
 enum NvmeFeatureIds {
     NVME_ARBITRATION                = 0x1,
@@ -893,21 +895,28 @@ typedef struct NvmeRangeType {
 
 //nvme logical block address format
 typedef struct NvmeLBAF {
-    uint16_t    ms;     //元数据部分的大小
-    uint8_t     lbads;  //支持lba的取值大小为2^lbads，且需要大于9
-    uint8_t     rp;     //说明本格式与其他格式比较起来的性能差异
+    uint16_t    ms;     //[metadata size]元数据部分的大小
+    uint8_t     lbads;  //[lba data size]支持lba的取值大小为2^lbads，且需要大于9
+    uint8_t     rp;     //[relative performance]说明本格式与其他格式比较起来的性能差异
 } NvmeLBAF;
 
 #define NVME_NSID_BROADCAST 0xffffffff
 //nvme设备通过命令nvme id-ns可以获取namespace的相关信息，对应的各个字段映射如下
+//https://nvmexpress.org/wp-content/uploads/NVM-Command-Set-Specification-1.0b-2021.12.18-Ratified.pdf
 //https://learn.microsoft.com/en-us/windows/win32/api/nvme/ns-nvme-nvme_identify_namespace_data
 typedef struct NvmeIdNs {
-    uint64_t    nsze;//namespace内的逻辑块数，在ZNS中n->num_zones (zone个数) * n->zone_size (zone内逻辑块数)
-    uint64_t    ncap;//namespace内任意时间可分配最大的逻辑块数 = nsze
-    uint64_t    nuse;//namespace内当前已经被分配的逻辑块数， = ncap
-    uint8_t     nsfeat;
-    uint8_t     nlbaf;  //lba format的个数
-    uint8_t     flbas;//formatted LBA size结构，会指出这个namespace中的LBA的大小和元数据大小等信息
+    uint64_t    nsze;       //[namespace size]内的逻辑块数，在ZNS中n->num_zones (zone个数) * n->zone_size (zone内逻辑块数)
+    uint64_t    ncap;       //[namespace capacity]内任意时间可分配最大的逻辑块数 = nsze
+    uint64_t    nuse;       //[namespace utilization]namespace内当前已经被分配的逻辑块数， = ncap
+    uint8_t     nsfeat;     /*[namespace features]
+                             * 7:5保留位
+                             * 4:OPTPERF[performance optimization] 1表示NPWG，NPWA,NPDG,NPDA,NOWS会被定义，并且被主机端用于IO优化;0代表主机不支持
+                             * 3:UIDREUSE
+                             * 2:DAE 1表示控制器支持deallocated or unwrittern logical block error；0表示不支持
+                             * 1:NSABP
+                             * 0:THINP [thin provisioning] 1表示支持thin provisioning*/
+    uint8_t     nlbaf;      //[number of lba format]的个数
+    uint8_t     flbas;      //[formatted LBA size]结构，会指出这个namespace中的LBA的大小和元数据大小等信息
     uint8_t     mc;
     uint8_t     dpc;
     uint8_t     dps;
@@ -925,13 +934,13 @@ typedef struct NvmeIdNs {
     uint8_t     nvmcap[16];
     uint16_t    npwg;
     uint16_t    npwa;
-    uint16_t    npdg;
+    uint16_t    npdg;       //[namespace preferred deallocate granularity]值为npda的整数倍，是推荐的逻辑块粒度(如果deallocate bit 为1）
     uint16_t    npda;
     uint16_t    nows;
     uint8_t     rsvd74[30];
     uint8_t     nguid[16];
     uint64_t    eui64;
-    NvmeLBAF    lbaf[16];   //lbaf格式候选  https://learn.microsoft.com/en-us/windows/win32/api/nvme/ns-nvme-nvme_lba_format
+    NvmeLBAF    lbaf[16];   //[LBA Format]格式候选  https://learn.microsoft.com/en-us/windows/win32/api/nvme/ns-nvme-nvme_lba_format
     uint8_t     rsvd192[192];
     uint8_t     vs[3712];
 } NvmeIdNs;
@@ -958,7 +967,7 @@ enum NvmeNsIdentifierType {
 
 #define NVME_ID_NS_NSFEAT_THIN(nsfeat)      ((nsfeat & 0x1))
 #define NVME_ID_NS_FLBAS_EXTENDED(flbas)    ((flbas >> 4) & 0x1)    //flbas的第4位用于说明元数据是否会跟在LBA的尾部传输，作为LBA的拓展部分,为1可以，为0不行
-#define NVME_ID_NS_FLBAS_INDEX(flbas)       ((flbas & 0xf))     //flbas的0到3位用于确定使用16种支持的LBA格式中的哪一种
+#define NVME_ID_NS_FLBAS_INDEX(flbas)       ((flbas & 0xf))         //flbas的0到3位用于确定使用16种支持的LBA格式中的哪一种
 #define NVME_ID_NS_MC_SEPARATE(mc)          ((mc >> 1) & 0x1)
 #define NVME_ID_NS_MC_EXTENDED(mc)          ((mc & 0x1))
 #define NVME_ID_NS_DPC_LAST_EIGHT(dpc)      ((dpc >> 4) & 0x1)
@@ -1213,7 +1222,7 @@ typedef struct FemuExtCtrlOps {
     void     (*init)(struct FemuCtrl *, Error **);
     void     (*exit)(struct FemuCtrl *);
     uint16_t (*rw_check_req)(struct FemuCtrl *, NvmeCmd *, NvmeRequest *);
-    int      (*start_ctrl)(struct FemuCtrl *);
+    int      (*start_ctrl)(struct FemuCtrl *);      //
     uint16_t (*admin_cmd)(struct FemuCtrl *, NvmeCmd *);
     uint16_t (*io_cmd)(struct FemuCtrl *, NvmeNamespace *, NvmeCmd *, NvmeRequest *);
     uint16_t (*get_log)(struct FemuCtrl *, NvmeCmd *);
@@ -1227,32 +1236,32 @@ typedef struct FemuCtrl {
     NvmeBar         bar;
 
     /* Coperd: ZNS FIXME */
-    struct zns      *zns;   // for ZNS Latency emualting, Inhoinno
+    struct zns      *zns;                       // for ZNS Latency emualting, Inhoinno
     QemuUUID        uuid;
-    uint32_t        zasl_bs;//NVME_DEFAULT_MAX_AZ_SIZE 128 * KiB
-    uint8_t         zasl;
-    bool            zoned;//true
-    bool            cross_zone_read;//false
-    uint64_t        zone_size_bs;//NVME_DEFAULT_ZONE_SIZE 64 * MiB
-    bool            zone_cap_bs;// 0
+    uint32_t        zasl_bs;                    //[zone append size limit byte size]NVME_DEFAULT_MAX_AZ_SIZE 128 * KiB
+    uint8_t         zasl;                       //[zone append size limit]
+    bool            zoned;                      //true
+    bool            cross_zone_read;            //false
+    uint64_t        zone_size_bs;               //[zone size byte size]NVME_DEFAULT_ZONE_SIZE 64 * MiB,似乎直接是字节为单位
+    bool            zone_cap_bs;                //[zone capacity byte size]capacity 和size可能不同，但是我们目前认为相同。理论上有zone_cap_bs <= zone_size_bs
     uint32_t        max_active_zones;//0
     uint32_t        max_open_zones;//0
-    uint32_t        zd_extension_size;//0
+    uint32_t        zd_extension_size;          //zoned extension size，注意该值表示多少个64字节
     PCIe_Gen3_x4    *pci_simulation;
     pthread_spinlock_t pci_lock;
 
     const uint32_t  *iocs;
-    uint8_t         csi;//NVME_CSI_ZONED
+    uint8_t         csi;                        //NVME_CSI_ZONED
     NvmeIdNsZoned   *id_ns_zoned;
-    NvmeZone        *zone_array;
-    QTAILQ_HEAD(, NvmeZone) exp_open_zones;
+    NvmeZone        *zone_array;                //zone数组
+    QTAILQ_HEAD(, NvmeZone) exp_open_zones;     //打开的zone的队列
     QTAILQ_HEAD(, NvmeZone) imp_open_zones;
     QTAILQ_HEAD(, NvmeZone) closed_zones;
     QTAILQ_HEAD(, NvmeZone) full_zones;
-    uint32_t        num_zones;// ns->size / lbasz / zone_size 个数
-    uint64_t        zone_size;// = zone_size_bs / lbasz 个数
-    uint64_t        zone_capacity;// = zone_cap_bs / lbasz 个数
-    uint32_t        zone_size_log2;
+    uint32_t        num_zones;                  // ns->size / lbasz / zone_size 个数
+    uint64_t        zone_size;                  // = zone_size_bs / lbasz 个数
+    uint64_t        zone_capacity;              // = zone_cap_bs / lbasz 个数
+    uint32_t        zone_size_log2;             // zone_size对2取对数
     uint8_t         *zd_extensions;
     int32_t         nr_open_zones;
     int32_t         nr_active_zones;
@@ -1263,7 +1272,7 @@ typedef struct FemuCtrl {
 
     time_t      start_time;
     uint16_t    temperature;
-    uint16_t    page_size;
+    uint16_t    page_size;                      //内存页的大小？
     uint16_t    page_bits;
     uint16_t    max_prp_ents;
     uint16_t    cqe_size;
@@ -1275,13 +1284,13 @@ typedef struct FemuCtrl {
     uint32_t    num_io_queues;
     uint32_t    max_q_ents;
     uint64_t    ns_size;
-    uint8_t     db_stride;      //doorbell控制器步长
+    uint8_t     db_stride;                      //doorbell控制器步长
     uint8_t     aerl;
     uint8_t     acl;
     uint8_t     elpe;
     uint8_t     elp_index;
     uint8_t     error_count;
-    uint8_t     mdts;
+    uint8_t     mdts;                           //以最小内存页大小为单位的计数
     uint8_t     cqr;
     uint8_t     max_sqes;
     uint8_t     max_cqes;
@@ -1307,7 +1316,7 @@ typedef struct FemuCtrl {
     uint16_t    vid;
     uint16_t    did;
     uint8_t     dlfeat;
-    uint32_t    cmbsz;      //controller memory buffer size
+    uint32_t    cmbsz;                          //controller memory buffer size
     uint32_t    cmbloc;
     uint8_t     *cmbuf;
 
@@ -1330,10 +1339,10 @@ typedef struct FemuCtrl {
     QEMUTimer       *aer_timer;
     uint8_t         aer_mask;
 
-	uint64_t		dbs_addr;   //doorbell基地址？
-	uint64_t		eis_addr;   //eventidx基地址?
-    uint64_t        dbs_addr_hva;
-    uint64_t        eis_addr_hva;
+	uint64_t		dbs_addr;               //doorbell基地址
+	uint64_t		eis_addr;               //eventidx基地址
+    uint64_t        dbs_addr_hva;           //[doorbell start address host virtual address]
+    uint64_t        eis_addr_hva;           //[eventidx start address host virtual address]
 
     uint8_t         femu_mode;
     uint8_t         lver; /* Coperd: OCSSD version, 0x1 -> OC1.2, 0x2 -> OC2.0 */
@@ -1361,14 +1370,14 @@ typedef struct FemuCtrl {
     int64_t chnl_pg_xfer_lat_ns;
 
     struct ssd      *ssd;
-    SsdDramBackend  *mbe;       //内部的memory 后端部分
+    SsdDramBackend  *mbe;           //内部的memory 后端部分
     int             completed;
 
     //延时模拟相关
     char            devname[64];
     struct rte_ring **to_ftl;
     struct rte_ring **to_poller;
-    pqueue_t        **pq;   //用于物理时延模拟的优先级队列
+    pqueue_t        **pq;           //用于物理时延模拟的优先级队列
     bool            *should_isr;    //可否中断的bool数组
     bool            poller_on;
 
@@ -1385,8 +1394,8 @@ typedef struct FemuCtrl {
 
 //用于nvme poller的qemu 线程的参数
 typedef struct NvmePollerThreadArgument {
-    FemuCtrl        *n;     //femuctrl控制结构体
-    int             index;  //索引序号
+    FemuCtrl        *n;         //FemuCtrl控制结构体
+    int             index;      //索引序号
 } NvmePollerThreadArgument;
 
 typedef struct NvmeDifTuple {
@@ -1523,11 +1532,12 @@ static inline hwaddr nvme_discontig(uint64_t *dma_addr, uint16_t page_size,
     return dma_addr[prp_index] + index_in_prp * entry_size;
 }
 
-static inline uint16_t nvme_check_mdts(FemuCtrl *n, size_t len)//(mdts:maximum data transfer size)
+//[maximum data transfer size]检查最大数据传输量
+static inline uint16_t 不一nvme_check_mdts(FemuCtrl *n, size_t len)
 {
     uint8_t mdts = n->mdts;
-
-    if (mdts && len > n->page_size << mdts) {
+    //mdts非0且
+    if (mdts && len > n->page_size << mdts) {//len
         return NVME_INVALID_FIELD | NVME_DNR;
     }
 

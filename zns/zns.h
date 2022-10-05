@@ -152,11 +152,12 @@ enum NvmeZoneReportType {
     NVME_ZONE_REPORT_OFFLINE         = 7,
 };
 
+//nvme内zone的类型
 enum NvmeZoneType {
-    NVME_ZONE_TYPE_RESERVED          = 0x00,
+    NVME_ZONE_TYPE_RESERVED          = 0x00,        //保留
     //for test, inhoinno
     NVME_ZONE_TYPE_CONVENTIONAL      = 0x01,
-    NVME_ZONE_TYPE_SEQ_WRITE         = 0x02,    
+    NVME_ZONE_TYPE_SEQ_WRITE         = 0x02,        //顺序写
 };
 
 enum NvmeZoneSendAction {
@@ -168,19 +169,19 @@ enum NvmeZoneSendAction {
     NVME_ZONE_ACTION_OFFLINE         = 0x05,//Offlining a zone makes the zone inaccessible. The data on the offlined zone will no longer be accessible, and writes to the zone will not be possible until the zone is reset.
     NVME_ZONE_ACTION_SET_ZD_EXT      = 0x10,
 };
-//NvmeZoneDescripstor
+//NVMe的zone描述符
 typedef struct QEMU_PACKED NvmeZoneDescr {
-    uint8_t     zt;     //Zone Type -> NVME_ZONE_TYPE_SEQ_WRITE(does sequential wirte required? NVME TP4053a section 2.3.1)
-    uint8_t     zs;     //Zone State
+    uint8_t     zt;         //[Zone Type] 取值NVME_ZONE_TYPE_SEQ_WRITE(does sequential wirte required? NVME TP4053a section 2.3.1)
+    uint8_t     zs;         //[Zone State]初始化赋值时把实际enum元素移位到高位去了，这应该与规定的格式有关系
     uint8_t     za;
     uint8_t     rsvd3[5];
-    uint64_t    zcap; //n->zone_capacity
-    uint64_t    zslba;  //Zone Start Logical Block Address
-    uint64_t    wp;     //Write pointer
+    uint64_t    zcap;       //[zone capacity]n->zone_capacity
+    uint64_t    zslba;      //[Zone Start Logical Block Address]注意这里的逻辑块地址是相对于namespace内的所有zone的全局地址
+    uint64_t    wp;         //[Write pointer]
     uint8_t     rsvd32[32];
 } NvmeZoneDescr;
 
-//zone的几种状态
+//zone的几种状态与上面的zs相关
 typedef enum NvmeZoneState {
     NVME_ZONE_STATE_RESERVED         = 0x00,
     NVME_ZONE_STATE_EMPTY            = 0x01,
@@ -194,23 +195,26 @@ typedef enum NvmeZoneState {
 
 #define NVME_SET_CSI(vec, csi) (vec |= (uint8_t)(1 << (csi)))
 
-typedef struct QEMU_PACKED NvmeLBAFE {//LBA Format Extension
-    uint64_t    zsze;//n->zone_size  Define the zone size (ZSZE)  [0x20000 LBAs]
-    uint8_t     zdes;//n->zd_extension_size >> 6 [Zone Descriptor Extension Size]
+//LBA Format Extension 16字节大小
+typedef struct QEMU_PACKED NvmeLBAFE {
+    uint64_t    zsze;       //[zone size]n->zone_size  Define the size of each zone in the namespaces,注意是zone内逻辑块的个数  [0x20000 LBAs]
+    uint8_t     zdes;       //[Zone Descriptor Extension Size]n->zd_extension_size >> 6 ，注意本值的单位是64字节
     uint8_t     rsvd9[7];
 } NvmeLBAFE;
 
+//identify namespaces zoned命令返回结构
+//https://nvmexpress.org/wp-content/uploads/NVMe-Zoned-Namespace-Command-Set-Specification-1.1a-2021.07.26-Ratified.pdf
 typedef struct QEMU_PACKED NvmeIdNsZoned {
-    uint16_t    zoc;//0 Zone Operation Characteristics
-    uint16_t    ozcs;// n->cross_zone_read ? 0x01 : 0x00;Optional Zoned Command Support
-    uint32_t    mar;//n->max_active_zones -> 0xffffffff means no limit
-    uint32_t    mor;//n->max_open_zones -> 0xffffffff means no limit //If zoned.max_active is specified, this value must be less than or equal to that.
-    uint32_t    rrl;
-    uint32_t    frl;
+    uint16_t    zoc;            //[Zone Operation Characteristics]第0位代表zone可以在不改变namespace格式的情况下调整zone的capacity
+    uint16_t    ozcs;           //[Optional Zoned Command Support]n->cross_zone_read ? 0x01 : 0x00;
+    uint32_t    mar;            //[max active resources]n->max_active_zones ; 0xffffffff means no limit
+    uint32_t    mor;            //[max open resources]n->max_open_zones ; 0xffffffff means no limit ;If zoned.max_active is specified, this value must be less than or equal to that.
+    uint32_t    rrl;            //[reset recommended limit]
+    uint32_t    frl;            //[finish recommended limit]
     uint8_t     rsvd20[2796];
-    NvmeLBAFE   lbafe[16];
+    NvmeLBAFE   lbafe[16];      //[LBA format extension]
     uint8_t     rsvd3072[768];
-    uint8_t     vs[256];
+    uint8_t     vs[256];        //[vendor specific]
 } NvmeIdNsZoned;
 
 //nvme的zone
@@ -230,7 +234,7 @@ typedef struct NvmeNamespaceParams {
     uint64_t zone_cap_bs;
     uint32_t max_active_zones;
     uint32_t max_open_zones;
-    uint32_t zd_extension_size;//	Set the Zone Descriptor Extension Size (ZDES). Must be a multiple of 64 bytes.
+    uint32_t zd_extension_size;     //Set the [Zone Descriptor Extension Size] (ZDES). Must be a multiple of 64 bytes.
 } NvmeNamespaceParams;
 
 static inline uint32_t zns_nsid(NvmeNamespace *ns)
@@ -242,12 +246,13 @@ static inline uint32_t zns_nsid(NvmeNamespace *ns)
     return -1;
 }
 
+//获取lba格式
 static inline NvmeLBAF *zns_ns_lbaf(NvmeNamespace *ns)
 {
     NvmeIdNs *id_ns = &ns->id_ns;
     return &id_ns->lbaf[NVME_ID_NS_FLBAS_INDEX(id_ns->flbas)];
 }
-
+//获取lbads，也就是扇区大小
 static inline uint8_t zns_ns_lbads(NvmeNamespace *ns)
 {
     /* NvmeLBAF */
@@ -260,7 +265,7 @@ static inline uint64_t zns_ns_nlbas(NvmeNamespace *ns)
     return ns->size >> zns_ns_lbads(ns);
 }
 
-/* convert an LBA to the equivalent in bytes */
+//将逻辑块的数量转换为bytes 数
 static inline size_t zns_l2b(NvmeNamespace *ns, uint64_t lba)
 {
     return lba << zns_ns_lbads(ns);
@@ -271,11 +276,12 @@ static inline NvmeZoneState zns_get_zone_state(NvmeZone *zone)
     return zone->d.zs >> 4;
 }
 
+//设置zone的实际状态
 static inline void zns_set_zone_state(NvmeZone *zone, NvmeZoneState state)
 {
     zone->d.zs = state << 4;
 }
-
+//获取zone的右侧边界lba 左闭右开
 static inline uint64_t zns_zone_rd_boundary(NvmeNamespace *ns, NvmeZone *zone)
 {
     return zone->d.zslba + ns->ctrl->zone_size;
