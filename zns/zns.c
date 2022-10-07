@@ -87,6 +87,7 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     return 0;
 }
 
+//初始化一个zone的状态
 static void zns_init_zoned_state(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -167,12 +168,12 @@ static void  zns_init_zone_identify(FemuCtrl *n, NvmeNamespace *ns, int lba_inde
         femu_err("the zone size (%"PRIu64" blocks) is not a multiple of the"
                  "calculated deallocation granularity (%"PRIu16" blocks); DULBE"
                  "support disabled", n->zone_size, ns->id_ns.npdg + 1);
-        ns->id_ns.nsfeat &= ~0x4;   //NSFEAT& 1011表示关闭DAE功能
+        ns->id_ns.nsfeat &= ~0x4;   //NSFEAT& 1011,用于关闭DAE功能
     }
 
     n->id_ns_zoned = id_ns_z;
 }
-
+//清理zone，调用的前提是d.wp已经还原成了w_ptr？暂时不理解
 static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
 {
     FemuCtrl *n = ns->ctrl;
@@ -180,17 +181,17 @@ static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
     zone->w_ptr = zone->d.wp;
     state = zns_get_zone_state(zone);
     if (zone->d.wp != zone->d.zslba ||
-        (zone->d.za & NVME_ZA_ZD_EXT_VALID)) {
-        if (state != NVME_ZONE_STATE_CLOSED) {
+        (zone->d.za & NVME_ZA_ZD_EXT_VALID)) {      //如果有一个关联的zone descriptor extension data
+        if (state != NVME_ZONE_STATE_CLOSED) {      //先关闭
             zns_set_zone_state(zone, NVME_ZONE_STATE_CLOSED);
         }
         zns_aor_inc_active(ns);
-        QTAILQ_INSERT_HEAD(&n->closed_zones, zone, entry);
+        QTAILQ_INSERT_HEAD(&n->closed_zones, zone, entry);  //加入到关闭队列
     } else {
-        zns_set_zone_state(zone, NVME_ZONE_STATE_EMPTY);
+        zns_set_zone_state(zone, NVME_ZONE_STATE_EMPTY);    //直接设置为空
     }
 }
-
+//关闭一个zoned模式的namespace
 static void zns_zoned_ns_shutdown(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -216,7 +217,7 @@ static void zns_zoned_ns_shutdown(NvmeNamespace *ns)
 
     assert(n->nr_open_zones == 0);
 }
-
+//关闭一个namespace
 void zns_ns_shutdown(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -226,17 +227,18 @@ void zns_ns_shutdown(NvmeNamespace *ns)
     }
 }
 
+//清理一个namespace
 void zns_ns_cleanup(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
-
+    //释放与zone直接相关的结构体内存
     if (n->zoned) {
         g_free(n->id_ns_zoned);
         g_free(n->zone_array);
         g_free(n->zd_extensions);
     }
 }
-
+//给zone分配一个state
 static void zns_assign_zone_state(NvmeNamespace *ns, NvmeZone *zone,
                                   NvmeZoneState state)
 {
@@ -282,8 +284,8 @@ static void zns_assign_zone_state(NvmeNamespace *ns, NvmeZone *zone,
 }
 
 /*
- * Check if we can open a zone without exceeding open/active limits.
  * AOR stands for "Active and Open Resources" (see TP 4053 section 2.5).
+ * 检查是否可以打开或者激活一个zone，且不超过open/active上限)
  */
 static int zns_aor_check(NvmeNamespace *ns, uint32_t act, uint32_t opn)
 {
@@ -300,7 +302,7 @@ static int zns_aor_check(NvmeNamespace *ns, uint32_t act, uint32_t opn)
 
     return NVME_SUCCESS;
 }
-
+//检查zone的状态是否可写
 static uint16_t zns_check_zone_state_for_write(NvmeZone *zone)
 {
     uint16_t status;
@@ -327,35 +329,35 @@ static uint16_t zns_check_zone_state_for_write(NvmeZone *zone)
 
     return status;
 }
-
+//检查zone是否满足本write请求的条件
 static uint16_t zns_check_zone_write(FemuCtrl *n, NvmeNamespace *ns,
                                       NvmeZone *zone, uint64_t slba,
                                       uint32_t nlb, bool append)
 {
     uint16_t status;
     uint32_t zidx = zns_zone_idx(ns, slba);
-    if (unlikely((slba + nlb) > zns_zone_wr_boundary(zone))) {
+    if (unlikely((slba + nlb) > zns_zone_wr_boundary(zone))) {  //先检查write边界
         status = NVME_ZONE_BOUNDARY_ERROR;
     } else {
-        status = zns_check_zone_state_for_write(zone);
+        status = zns_check_zone_state_for_write(zone);          //检查状态是否可写
     }
 
     if (status != NVME_SUCCESS) {
     } else {
-        assert(zns_wp_is_valid(zone));
+        assert(zns_wp_is_valid(zone));              //断言检查写指针状态
         if (append) {
-            if (unlikely(slba != zone->d.zslba)) {
+            if (unlikely(slba != zone->d.zslba)) {  //必须从zslba开始写？
                 //Zone Start Logical Block Address
                 status = NVME_INVALID_FIELD;
             }
-            if (zns_l2b(ns, nlb) > (n->page_size << n->zasl)) {
+            if (zns_l2b(ns, nlb) > (n->page_size << n->zasl)) {     //逻辑块对应地字节数不应该超过单次可写的最大值
                 status = NVME_INVALID_FIELD;
             }
             if((zidx == 0) || (zidx == 1) || (zidx == 2) || (zidx == 3)){
                 femu_err("[inho] zns.c:406 append wp error(%d) in zidx=%d",status, zidx);
             }
-        } else if (unlikely(slba != zone->w_ptr)) {
-            
+        } else if (unlikely(slba != zone->w_ptr)) {                 //检查slba满足追加写/顺序写
+
             status = NVME_ZONE_INVALID_WRITE;   
 #if MK_ZONE_CONVENTIONAL
             if((zidx & (UINT32_MAX << MK_ZONE_CONVENTIONAL))==0){
@@ -394,7 +396,7 @@ static uint16_t zns_check_zone_state_for_read(NvmeZone *zone)
 
     return status;
 }
-
+//检查zone是否满足本read请求的条件
 static uint16_t zns_check_zone_read(NvmeNamespace *ns, uint64_t slba,
                                     uint32_t nlb)
 {
@@ -427,40 +429,40 @@ static uint16_t zns_check_zone_read(NvmeNamespace *ns, uint64_t slba,
 
     return status;
 }
-
+//zns状态转置
 static void zns_auto_transition_zone(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
     NvmeZone *zone;
 
     if (n->max_open_zones &&
-        n->nr_open_zones == n->max_open_zones) {
-        zone = QTAILQ_FIRST(&n->imp_open_zones);
-        if (zone) {
+        n->nr_open_zones == n->max_open_zones) {    //如果当前打开的zone已经达到上限
+        zone = QTAILQ_FIRST(&n->imp_open_zones);    //获取隐式open的zone队列的第一个zone
+        if (zone) {                                 //如果存在，那么将其关闭
              /* Automatically close this implicitly open zone */
-            QTAILQ_REMOVE(&n->imp_open_zones, zone, entry);
-            zns_aor_dec_open(ns);
-            zns_assign_zone_state(ns, zone, NVME_ZONE_STATE_CLOSED);
+            QTAILQ_REMOVE(&n->imp_open_zones, zone, entry);         //从队列中移除
+            zns_aor_dec_open(ns);   //减少open个数
+            zns_assign_zone_state(ns, zone, NVME_ZONE_STATE_CLOSED);    //将该zone的状态改为关闭
         }
     }
 }
-
+//自动打开zone
 static uint16_t zns_auto_open_zone(NvmeNamespace *ns, NvmeZone *zone)
 {
     uint16_t status = NVME_SUCCESS;
     uint8_t zs = zns_get_zone_state(zone);
 
-    if (zs == NVME_ZONE_STATE_EMPTY) {
+    if (zs == NVME_ZONE_STATE_EMPTY) {      //处于empty状态时
         zns_auto_transition_zone(ns);
         status = zns_aor_check(ns, 1, 1);
-    } else if (zs == NVME_ZONE_STATE_CLOSED) {
+    } else if (zs == NVME_ZONE_STATE_CLOSED) {      //处于closed状态时,处于已激活但是还没打开？
         zns_auto_transition_zone(ns);
         status = zns_aor_check(ns, 0, 1);
     }
 
     return status;
 }
-
+//write完成后的处理
 static void zns_finalize_zoned_write(NvmeNamespace *ns, NvmeRequest *req,
                                      bool failed)
 {
@@ -474,12 +476,12 @@ static void zns_finalize_zoned_write(NvmeNamespace *ns, NvmeRequest *req,
     nlb = le16_to_cpu(rw->nlb) + 1;
     zone = zns_get_zone_by_slba(ns, slba);
 
-    zone->d.wp += nlb;
+    zone->d.wp += nlb;          //注意这里是d里面的，在zns_write中有一个对zone里的w_ptr+
 
     if (failed) {
         res->slba = 0;
     }
-
+    //写满的处理
     if (zone->d.wp == zns_zone_wr_boundary(zone)) {
         switch (zns_get_zone_state(zone)) {
         case NVME_ZONE_STATE_IMPLICITLY_OPEN:
@@ -499,7 +501,7 @@ static void zns_finalize_zoned_write(NvmeNamespace *ns, NvmeRequest *req,
         }
     }
 }
-
+//移动zone写指针
 static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone,
                                     uint32_t nlb)
 {
@@ -508,7 +510,7 @@ static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone,
     //pthread_spin_lock(&ns->ctrl->pci_lock);
     zone->w_ptr += nlb;
     //pthread_spin_unlock(&ns->ctrl->pci_lock);
-    if (zone->w_ptr < zns_zone_wr_boundary(zone)) {
+    if (zone->w_ptr < zns_zone_wr_boundary(zone)) { //状态合理时，更新状态
         zs = zns_get_zone_state(zone);
         switch (zs) {
         case NVME_ZONE_STATE_EMPTY:
@@ -527,7 +529,7 @@ struct zns_zone_reset_ctx {
     NvmeRequest *req;
     NvmeZone    *zone;
 };
-
+//重置zone空间，没有理解aio体现在哪里
 static void zns_aio_zone_reset_cb(NvmeRequest *req, NvmeZone *zone)
 {
     NvmeNamespace *ns = req->ns;
@@ -551,9 +553,11 @@ static void zns_aio_zone_reset_cb(NvmeRequest *req, NvmeZone *zone)
     }
 }
 
+//处理函数
 typedef uint16_t (*op_handler_t)(NvmeNamespace *, NvmeZone *, NvmeZoneState,
                                  NvmeRequest *);
 
+//NVMe处理掩码
 enum NvmeZoneProcessingMask {
     NVME_PROC_CURRENT_ZONE    = 0,
     NVME_PROC_OPENED_ZONES    = 1 << 0,
@@ -561,13 +565,13 @@ enum NvmeZoneProcessingMask {
     NVME_PROC_READ_ONLY_ZONES = 1 << 2,
     NVME_PROC_FULL_ZONES      = 1 << 3,
 };
-
+//打开一个zone
 static uint16_t zns_open_zone(NvmeNamespace *ns, NvmeZone *zone,
                               NvmeZoneState state, NvmeRequest *req)
 {
     uint16_t status;
 
-    switch (state) {
+    switch (state) {                //switch中没有break，连续执行直到显式打开
     case NVME_ZONE_STATE_EMPTY:
         status = zns_aor_check(ns, 1, 0);
         if (status != NVME_SUCCESS) {
@@ -594,7 +598,7 @@ static uint16_t zns_open_zone(NvmeNamespace *ns, NvmeZone *zone,
         return NVME_ZONE_INVAL_TRANSITION;
     }
 }
-
+//关闭一个zone
 static uint16_t zns_close_zone(NvmeNamespace *ns, NvmeZone *zone,
                                NvmeZoneState state, NvmeRequest *req)
 {
@@ -611,7 +615,7 @@ static uint16_t zns_close_zone(NvmeNamespace *ns, NvmeZone *zone,
         return NVME_ZONE_INVAL_TRANSITION;
     }
 }
-
+//完成一个zone
 static uint16_t zns_finish_zone(NvmeNamespace *ns, NvmeZone *zone,
                                 NvmeZoneState state, NvmeRequest *req)
 {
@@ -635,7 +639,7 @@ static uint16_t zns_finish_zone(NvmeNamespace *ns, NvmeZone *zone,
         return NVME_ZONE_INVAL_TRANSITION;
     }
 }
-
+//重置一个zone
 static uint16_t zns_reset_zone(NvmeNamespace *ns, NvmeZone *zone,
                                NvmeZoneState state, NvmeRequest *req)
 {
@@ -656,6 +660,7 @@ static uint16_t zns_reset_zone(NvmeNamespace *ns, NvmeZone *zone,
     return NVME_SUCCESS;
 }
 
+//offline一个zone
 static uint16_t zns_offline_zone(NvmeNamespace *ns, NvmeZone *zone,
                                  NvmeZoneState state, NvmeRequest *req)
 {
@@ -670,6 +675,7 @@ static uint16_t zns_offline_zone(NvmeNamespace *ns, NvmeZone *zone,
     }
 }
 
+//zone是空状态时，设置zone descriptor extension
 static uint16_t zns_set_zd_ext(NvmeNamespace *ns, NvmeZone *zone)
 {
     uint16_t status;
@@ -681,7 +687,7 @@ static uint16_t zns_set_zd_ext(NvmeNamespace *ns, NvmeZone *zone)
             return status;
         }
         zns_aor_inc_active(ns);
-        zone->d.za |= NVME_ZA_ZD_EXT_VALID;
+        zone->d.za |= NVME_ZA_ZD_EXT_VALID;     //将za.zdev设置为1
         zns_assign_zone_state(ns, zone, NVME_ZONE_STATE_CLOSED);
         return NVME_SUCCESS;
     }
@@ -689,6 +695,7 @@ static uint16_t zns_set_zd_ext(NvmeNamespace *ns, NvmeZone *zone)
     return NVME_ZONE_INVAL_TRANSITION;
 }
 
+//zone操作掩码设置，在当前proc_mask上进行与操作
 static uint16_t zns_bulk_proc_zone(NvmeNamespace *ns, NvmeZone *zone,
                                    enum NvmeZoneProcessingMask proc_mask,
                                    op_handler_t op_hndlr, NvmeRequest *req)
@@ -722,6 +729,7 @@ static uint16_t zns_bulk_proc_zone(NvmeNamespace *ns, NvmeZone *zone,
     return status;
 }
 
+//zone操作执行
 static uint16_t zns_do_zone_op(NvmeNamespace *ns, NvmeZone *zone,
                                enum NvmeZoneProcessingMask proc_mask,
                                op_handler_t op_hndlr, NvmeRequest *req)
@@ -807,7 +815,7 @@ static uint16_t zns_get_mgmt_zone_slba_idx(FemuCtrl *n, NvmeCmd *c,
 
     return NVME_SUCCESS;
 }
-
+//zone 管理命令执行
 static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
 {
     NvmeCmd *cmd = (NvmeCmd *)&req->cmd;
@@ -1250,7 +1258,7 @@ static uint16_t zns_read(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     }
     //完成检查后计算字节为单位的数据起始偏移量
     data_offset = zns_l2b(ns, slba);
-    req->expire_time += zns_advance_status(n,ns,cmd,req);
+    req->expire_time += zns_advance_status(n,ns,cmd,req);   //模拟时延，原版是没有的
     /*PCI 延迟模型*/
 
 #if SK_HYNIX_VALIDATION
@@ -1284,7 +1292,7 @@ static uint16_t zns_read(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 err:
     return status | NVME_DNR;
 }
-
+//zns定义的实际处理write命令的函数，与read可以说是基本一样
 static uint16_t zns_write(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                           NvmeRequest *req)
 {
@@ -1315,20 +1323,20 @@ static uint16_t zns_write(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     if (status) {
         goto err;
     }
-    status = zns_auto_open_zone(ns, zone);
+    status = zns_auto_open_zone(ns, zone);  //自动打开zone
     if (status) {
         goto err;
     }
 
-    res->slba = zns_advance_zone_wp(ns, zone, nlb);
-    data_offset = zns_l2b(ns, slba);
-    status = zns_map_dptr(n, data_size, req);   //dptr:data pointer
+    res->slba = zns_advance_zone_wp(ns, zone, nlb);     //取得写入完成后wp的值作为完成结果，也就是完成队列entry的slba
+    data_offset = zns_l2b(ns, slba);                //取得偏移量
+    status = zns_map_dptr(n, data_size, req);       //取得地址映射
     if (status) {
         goto err;
     }
-    req->expire_time += zns_advance_status(n,ns,cmd,req);
-    backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
-    zns_finalize_zoned_write(ns, req, false);
+    req->expire_time += zns_advance_status(n,ns,cmd,req);           //推进模拟延迟
+    backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);     //通过后端实际写入数据
+    zns_finalize_zoned_write(ns, req, false);                       //完成zone write的收尾工作
 
     return NVME_SUCCESS;
 

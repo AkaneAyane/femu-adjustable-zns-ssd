@@ -1238,8 +1238,8 @@ typedef struct FemuCtrl {
     /* Coperd: ZNS FIXME */
     struct zns      *zns;                       // for ZNS Latency emualting, Inhoinno
     QemuUUID        uuid;
-    uint32_t        zasl_bs;                    //[zone append size limit byte size]NVME_DEFAULT_MAX_AZ_SIZE 128 * KiB
-    uint8_t         zasl;                       //[zone append size limit]
+    uint32_t        zasl_bs;                    //[zone append size limit byte size]NVME_DEFAULT_MAX_AZ_SIZE 128 * KiB 每次追加写入数据量的最大值
+    uint8_t         zasl;                       //[zone append size limit]  每次追加写入的数据量最大值以2为底的对数
     bool            zoned;                      //true
     bool            cross_zone_read;            //false
     uint64_t        zone_size_bs;               //[zone size byte size]NVME_DEFAULT_ZONE_SIZE 64 * MiB,似乎直接是字节为单位
@@ -1263,8 +1263,8 @@ typedef struct FemuCtrl {
     uint64_t        zone_capacity;              // = zone_cap_bs / lbasz 个数
     uint32_t        zone_size_log2;             // zone_size对2取对数
     uint8_t         *zd_extensions;
-    int32_t         nr_open_zones;
-    int32_t         nr_active_zones;
+    int32_t         nr_open_zones;              //[number of open zons]
+    int32_t         nr_active_zones;            //[number of active zones]
 
     /* Coperd: OC2.0 FIXME */
     NvmeParams  params;
@@ -1272,7 +1272,7 @@ typedef struct FemuCtrl {
 
     time_t      start_time;
     uint16_t    temperature;
-    uint16_t    page_size;                      //内存页的大小？
+    uint16_t    page_size;                      //内存页的大小？zone每次追加的页大小？
     uint16_t    page_bits;
     uint16_t    max_prp_ents;
     uint16_t    cqe_size;

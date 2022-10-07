@@ -116,19 +116,22 @@ typedef struct QEMU_PACKED NvmeZonedResult {
     uint64_t slba;
 } NvmeZonedResult;
 
-//zone 内的nvme id control
+//zone 内的identify controller结构
+//https://nvmexpress.org/wp-content/uploads/NVM-Zoned-Namespace-Command-Set-Specification-1.1b-2022.01.05-Ratified.pdf figure50
 typedef struct NvmeIdCtrlZoned {    //4KB 중 1byte
-    uint8_t     zasl;           //1byte : ""区域追加大小限制。如果保留默认值 (0)，
-    //则区域附加大小限制将等于最大数据传输大小 (MDTS)。否则，区域追加大小限制等于 
-    //2 的 zasl 次方乘以最小内存页面大小 (4096 B)，但不能超过最大数据传输大小
+    uint8_t     zasl;           /*  [Zone Append Size Limit]如果此字段为非0值，代表着单次Zone Append最大的数据传输大小
+                                 *  值为 2 的 zasl 次方乘以最小内存页面大小 (定义在CAP.MPSMIN 一般为4096 B)，且不能超过MDTS
+                                 *  如果此字段为0，那么单次Zone Append最大的数据传输大小直接受nvme base标准中的MDTS字段来限制
+                                 */
     uint8_t     rsvd1[4095];   //reserved : 
 } NvmeIdCtrlZoned;
 
+//配合NVmeZoneDescriptor za使用
 enum NvmeZoneAttr {
-    NVME_ZA_FINISHED_BY_CTLR         = 1 << 0,
-    NVME_ZA_FINISH_RECOMMENDED       = 1 << 1,
-    NVME_ZA_RESET_RECOMMENDED        = 1 << 2,
-    NVME_ZA_ZD_EXT_VALID             = 1 << 7,
+    NVME_ZA_FINISHED_BY_CTLR         = 1 << 0,      //ZFC   设置为1时，controller通过一个Zone Active Excursion来完成一个zone
+    NVME_ZA_FINISH_RECOMMENDED       = 1 << 1,      //FZR   设置为1时，controller推荐这个zone被设置为完成？
+    NVME_ZA_RESET_RECOMMENDED        = 1 << 2,      //RZR   设置为1时，controller推荐这个zone被重置
+    NVME_ZA_ZD_EXT_VALID             = 1 << 7,      //ZDEV  设置为1时，会有一个Zone Descriptor Extension Data与这个zone关联起来
 };
 
 typedef struct QEMU_PACKED NvmeZoneReportHeader {
@@ -141,6 +144,7 @@ enum NvmeZoneReceiveAction {
     NVME_ZONE_REPORT_EXTENDED        = 1,
 };
 
+//NvmeZone 报告类型
 enum NvmeZoneReportType {
     NVME_ZONE_REPORT_ALL             = 0,
     NVME_ZONE_REPORT_EMPTY           = 1,
@@ -170,10 +174,11 @@ enum NvmeZoneSendAction {
     NVME_ZONE_ACTION_SET_ZD_EXT      = 0x10,
 };
 //NVMe的zone描述符
+//https://nvmexpress.org/wp-content/uploads/NVM-Zoned-Namespace-Command-Set-Specification-1.1b-2022.01.05-Ratified.pdf figure37
 typedef struct QEMU_PACKED NvmeZoneDescr {
     uint8_t     zt;         //[Zone Type] 取值NVME_ZONE_TYPE_SEQ_WRITE(does sequential wirte required? NVME TP4053a section 2.3.1)
     uint8_t     zs;         //[Zone State]初始化赋值时把实际enum元素移位到高位去了，这应该与规定的格式有关系
-    uint8_t     za;
+    uint8_t     za;         //[Zone Attributes]
     uint8_t     rsvd3[5];
     uint64_t    zcap;       //[zone capacity]n->zone_capacity
     uint64_t    zslba;      //[Zone Start Logical Block Address]注意这里的逻辑块地址是相对于namespace内的所有zone的全局地址
@@ -270,7 +275,7 @@ static inline size_t zns_l2b(NvmeNamespace *ns, uint64_t lba)
 {
     return lba << zns_ns_lbads(ns);
 }
-
+//获取zone的状态
 static inline NvmeZoneState zns_get_zone_state(NvmeZone *zone)
 {
     return zone->d.zs >> 4;
@@ -281,17 +286,17 @@ static inline void zns_set_zone_state(NvmeZone *zone, NvmeZoneState state)
 {
     zone->d.zs = state << 4;
 }
-//获取zone的右侧边界lba 左闭右开
+//获取zone的read右侧边界lba 左闭右开
 static inline uint64_t zns_zone_rd_boundary(NvmeNamespace *ns, NvmeZone *zone)
 {
     return zone->d.zslba + ns->ctrl->zone_size;
 }
-
+//获取zone的write右侧边界lba 左闭右开
 static inline uint64_t zns_zone_wr_boundary(NvmeZone *zone)
 {
-    return zone->d.zslba + zone->d.zcap;
+    return zone->d.zslba + zone->d.zcap;    //与read不同的是，由capacity来控制
 }
-
+//检查zns 写指针的状态，这里其实就是检查状态
 static inline bool zns_wp_is_valid(NvmeZone *zone)
 {
     uint8_t st = zns_get_zone_state(zone);
@@ -305,7 +310,7 @@ static inline uint8_t *zns_get_zd_extension(NvmeNamespace *ns, uint32_t zone_idx
 {
     return &ns->ctrl->zd_extensions[zone_idx * ns->ctrl->zd_extension_size];
 }
-
+//active and open resouces 增加open数量
 static inline void zns_aor_inc_open(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -315,7 +320,7 @@ static inline void zns_aor_inc_open(NvmeNamespace *ns)
         assert(n->nr_open_zones <= n->max_open_zones);
     }
 }
-
+//active and open resouces 减少open数量
 static inline void zns_aor_dec_open(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -325,7 +330,7 @@ static inline void zns_aor_dec_open(NvmeNamespace *ns)
     }
     assert(n->nr_open_zones >= 0);
 }
-
+//active and open resouces 增加active数量
 static inline void zns_aor_inc_active(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -335,7 +340,7 @@ static inline void zns_aor_inc_active(NvmeNamespace *ns)
         assert(n->nr_active_zones <= n->max_active_zones);
     }
 }
-
+//active and open resouces 减少active数量
 static inline void zns_aor_dec_active(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
