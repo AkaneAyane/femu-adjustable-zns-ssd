@@ -1266,6 +1266,10 @@ typedef struct FemuCtrl {
     int32_t         nr_open_zones;              //[number of open zons]
     int32_t         nr_active_zones;            //[number of active zones]
 
+    /*For dynamic zns-ssd   */
+
+
+
     /* Coperd: OC2.0 FIXME */
     NvmeParams  params;
     FemuExtCtrlOps ext_ops;
@@ -1417,6 +1421,7 @@ enum {
     FEMU_ZNSSD_MODE = 3,
     FEMU_SMARTSSD_MODE,
     FEMU_KVSSD_MODE,
+    FEMU_DYNAMIC_ZNSSSD_MODE = 6
 };
 
 enum {
@@ -1448,7 +1453,10 @@ static inline bool ZNSSD(FemuCtrl *n)
 {
     return (n->femu_mode == FEMU_ZNSSD_MODE);
 }
-
+static inline bool DZNSSSD(FemuCtrl *n)
+{
+    return (n->femu_mode == FEMU_DYNAMIC_ZNSSSD_MODE);
+}
 /* Basic NVMe Queue Pair operation APIs from nvme-util.c */
 int nvme_check_sqid(FemuCtrl *n, uint16_t sqid);
 int nvme_check_cqid(FemuCtrl *n, uint16_t cqid);
@@ -1533,7 +1541,7 @@ static inline hwaddr nvme_discontig(uint64_t *dma_addr, uint16_t page_size,
 }
 
 //[maximum data transfer size]检查最大数据传输量
-static inline uint16_t 不一nvme_check_mdts(FemuCtrl *n, size_t len)
+static inline uint16_t nvme_check_mdts(FemuCtrl *n, size_t len)
 {
     uint8_t mdts = n->mdts;
     //mdts非0且
