@@ -527,9 +527,9 @@ static int nvme_register_extensions(FemuCtrl *n)
         nvme_register_bbssd(n);
     } else if (ZNSSD(n)) {
         nvme_register_znssd(n);
-    } else {
+    } else if (DZNSSSD(n)){
+        nvme_register_dynamic_znsssd(n);
     }
-
     return 0;
 }
 //实现初始化一个femu设备的入口点
