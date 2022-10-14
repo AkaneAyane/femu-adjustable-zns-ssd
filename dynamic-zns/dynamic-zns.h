@@ -31,11 +31,11 @@ enum {
 struct ppa {
     union {
         struct {
+            uint64_t ch  : CH_BITS;
+            uint64_t lun : LUN_BITS;
+            uint64_t pl  : PL_BITS;
             uint64_t pg  : PG_BITS;
             uint64_t blk : BLK_BITS;
-            uint64_t pl  : PL_BITS;
-            uint64_t lun : LUN_BITS;
-            uint64_t ch  : CH_BITS;
             uint64_t rsv : 1;
         } g;
         uint64_t ppa;
@@ -95,6 +95,41 @@ typedef struct zns_ssd_channel {
  * 与延迟模拟相关的zns-ssd 参数
  */
 struct zns_ssdparams{
+    /* basic params*/
+    int secsz;        /* sector size in bytes */
+    int secs_per_pg;  /* # of sectors per page */
+    int pgs_per_blk;  /* # of NAND pages per block */
+    int blks_per_pl;  /* # of blocks per plane */
+    int pls_per_lun;  /* # of planes per LUN (Die) */
+    int luns_per_ch;  /* # of LUNs per channel */
+
+    int secs_per_blk; /* # of sectors per block */
+    int secs_per_pl;  /* # of sectors per plane */
+    int secs_per_lun; /* # of sectors per LUN */
+    int secs_per_ch;  /* # of sectors per channel */
+    int tt_secs;      /* # of sectors in the SSD */
+
+    /* calculated values*/
+    int pgs_per_pl;   /* # of pages per plane */
+    int pgs_per_lun;  /* # of pages per LUN (Die) */
+    int pgs_per_ch;   /* # of pages per channel */
+    int tt_pgs;       /* total # of pages in the SSD */
+
+    int blks_per_lun; /* # of blocks per LUN */
+    int blks_per_ch;  /* # of blocks per channel */
+    int tt_blks;      /* total # of blocks in the SSD */
+
+    int secs_per_line;
+    int pgs_per_line;
+    int blks_per_line;
+    int tt_lines;
+
+    int pls_per_ch;   /* # of planes per channel */
+    int tt_pls;       /* total # of planes in the SSD */
+
+    int tt_luns;      /* total # of LUNs in the SSD */
+
+    /*zone info*/
     uint16_t register_model;    /* =1 single register =2 double register */
     uint64_t nchnls;            /* # of channels in the SSD */
     uint64_t ways;              /* # of ways 每个channel in the SSD */

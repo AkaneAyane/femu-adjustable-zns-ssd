@@ -294,7 +294,7 @@ void nvme_create_poller(FemuCtrl *n)
         }
         assert(rte_ring_empty(n->to_poller[i]));
     }
-    //创建pq指针数组，同样类似于上面
+    //创建pq指针数组，同样与上面类似
     n->pq = malloc(sizeof(pqueue_t *) * (n->num_poller + 1));
     for (int i = 1; i <= n->num_poller; i++) {
         n->pq[i] = pqueue_init(FEMU_MAX_INF_REQS, cmp_pri, get_pri, set_pri,

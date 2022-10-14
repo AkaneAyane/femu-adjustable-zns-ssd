@@ -878,7 +878,9 @@ static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
         }
         *resets = 1;
         status = zns_do_zone_op(ns, zone, proc_mask, zns_reset_zone, req);
+        /*在io路径上直接计算物理时延模拟，暂时取消
         req->expire_time += zns_advance_status(n, ns, cmd, req);
+         */
         (*resets)--;
         return NVME_SUCCESS;
     case NVME_ZONE_ACTION_OFFLINE:
@@ -1135,8 +1137,9 @@ static uint16_t zns_do_write(FemuCtrl *n, NvmeRequest *req, bool append,
         if (status) {
             goto err;
         }
-        
+        /*在IO路径上直接进行时延模拟，暂时取消，从而在线程中统一进行
         req->expire_time += zns_advance_status(n,ns,&req->cmd,req);
+        */
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
     }
 
@@ -1258,9 +1261,11 @@ static uint16_t zns_read(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     }
     //完成检查后计算字节为单位的数据起始偏移量
     data_offset = zns_l2b(ns, slba);
-    req->expire_time += zns_advance_status(n,ns,cmd,req);   //模拟时延，原版是没有的
-    /*PCI 延迟模型*/
+    /*模拟时延，并且直接在io路径上计算而不是直接在线程中计算，暂时取消
+    req->expire_time += zns_advance_status(n,ns,cmd,req);
+     */
 
+    /*PCI 延迟模型*/
 #if SK_HYNIX_VALIDATION
     //lock
     //pthread_spin_lock(&n->pci_lock);
@@ -1334,7 +1339,9 @@ static uint16_t zns_write(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     if (status) {
         goto err;
     }
-    req->expire_time += zns_advance_status(n,ns,cmd,req);           //推进模拟延迟
+    /*在io路径上推进时延，暂时取消
+    req->expire_time += zns_advance_status(n,ns,cmd,req);
+     */
     backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);     //通过后端实际写入数据
     zns_finalize_zoned_write(ns, req, false);                       //完成zone write的收尾工作
 
@@ -1513,19 +1520,45 @@ static void zns_exit(FemuCtrl *n)
  * 16chnl 2way
  * 获取ssd 物理页地址
  */
-static inline uint64_t zns_get_ppn(NvmeNamespace *ns, uint64_t slba){
+
+//由slba来获取对应地ppa结构，首先根据slba划分到zone，根据zone的范围确定对应的ppa
+static inline struct ppa* zns_get_ppa(NvmeNamespace *ns,uint64_t slba){
 
 }
-//计算channel id
+//由slba首先获取到ppa结构然后转换为ppn
+static inline uint64_t zns_get_ppn(struct zns *zns, uint64_t slba){
+    struct ppa *supposed_ppa=zns_get_ppa(ns,slba);
+    struct ssdparams *spp= &zns->sp;
+    uint64_t ppn=supposed_ppa->g.
+
+}
+
+//根据slba来获取到ppa从而可以判定对应地page所在的channel
 static inline uint64_t zns_get_chnl_idx(NvmeNamespace *ns, uint64_t slba){
     return (zns_get_ppn(ns,slba) % (ns->ctrl->zns->sp.nchnls));
 }
-//计算die id
+//计算相对lun id
 static inline uint64_t zns_get_lun_idx(NvmeNamespace *ns, uint64_t slba){
     struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
     return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
 }
 
+//计算相对plane id
+static inline uint64_t zns_get_plane_idx(NvmeNamespace *ns, uint64_t slba){
+    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
+    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+}
+
+//计算相对page id
+static inline uint64_t zns_get_page_idx(NvmeNamespace *ns, uint64_t slba){
+    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
+    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+}
+//计算相对block id
+static inline uint64_t zns_get_block_idx(NvmeNamespace *ns, uint64_t slba){
+    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
+    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+}
 /**
  * 1-to-N model 一个zone包含多个channel的chip
  */

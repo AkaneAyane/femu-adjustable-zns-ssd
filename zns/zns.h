@@ -110,7 +110,7 @@ typedef struct zns {
  * @brief 
  * latency emulation with zns ssd, struct znsssd is needed
  * 
- * 
+ *
  */
 typedef struct QEMU_PACKED NvmeZonedResult {
     uint64_t slba;
