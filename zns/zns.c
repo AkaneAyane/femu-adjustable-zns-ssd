@@ -815,7 +815,9 @@ static uint16_t zns_get_mgmt_zone_slba_idx(FemuCtrl *n, NvmeCmd *c,
 
     return NVME_SUCCESS;
 }
-//zone 管理命令执行
+
+//zns的专属management send指令的处理函数
+//https://nvmexpress.org/wp-content/uploads/NVM-Zoned-Namespace-Command-Set-Specification-1.1b-2022.01.05-Ratified.pdf 3.4.3
 static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
 {
     NvmeCmd *cmd = (NvmeCmd *)&req->cmd;
@@ -913,6 +915,7 @@ static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
     return status;
 }
 
+//检查zone的状态是否是某一种
 static bool zns_zone_matches_filter(uint32_t zafs, NvmeZone *zl)
 {
     NvmeZoneState zs = zns_get_zone_state(zl);
@@ -939,6 +942,8 @@ static bool zns_zone_matches_filter(uint32_t zafs, NvmeZone *zl)
     }
 }
 
+//zns的专属management recv指令的处理函数
+//https://nvmexpress.org/wp-content/uploads/NVM-Zoned-Namespace-Command-Set-Specification-1.1b-2022.01.05-Ratified.pdf 3.4.2
 static uint16_t zns_zone_mgmt_recv(FemuCtrl *n, NvmeRequest *req)
 {
     NvmeCmd *cmd = (NvmeCmd *)&req->cmd;
@@ -1047,6 +1052,7 @@ static uint16_t zns_zone_mgmt_recv(FemuCtrl *n, NvmeRequest *req)
     return status;
 }
 
+//检查CSI指令集是否支持NVM
 static inline bool nvme_csi_has_nvm_support(NvmeNamespace *ns)
 {
     switch (ns->ctrl->csi) {
@@ -1084,7 +1090,7 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
         return NVME_INVALID_FIELD;
     }
 }
-
+//用于append操作的特异化write，实际的逻辑和zns_write几乎相同
 static uint16_t zns_do_write(FemuCtrl *n, NvmeRequest *req, bool append,
                              bool wrz)
 {
@@ -1147,7 +1153,7 @@ err:
     printf("****************Append Failed***************\n");
     return status | NVME_DNR;
 }
-
+//执行zns admin命令，未实现
 static uint16_t zns_admin_cmd(FemuCtrl *n, NvmeCmd *cmd)
 {
 
@@ -1156,10 +1162,10 @@ static uint16_t zns_admin_cmd(FemuCtrl *n, NvmeCmd *cmd)
         return NVME_INVALID_OPCODE | NVME_DNR;
     }
 }
-
+//zns zone的追加操作，我理解的话是一次追加到一个zone里，从zslba开始
 static inline uint16_t zns_zone_append(FemuCtrl *n, NvmeRequest *req)
 {
-    return zns_do_write(n, req, true, false);
+    return zns_do_write(n, req, true, false); //实质上就是通过zns_do_write来实现
 }
 //检查dulbe状态，没有实现
 static uint16_t zns_check_dulbe(NvmeNamespace *ns, uint64_t slba, uint32_t nlb)
@@ -1401,6 +1407,7 @@ static int zns_init_zone_cap(FemuCtrl *n)
     return 0;
 }
 
+//zns初始化控制器
 static int zns_start_ctrl(FemuCtrl *n)
 {
     /* Coperd: let's fail early before anything crazy happens */
