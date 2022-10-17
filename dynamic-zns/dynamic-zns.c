@@ -1522,42 +1522,59 @@ static void zns_exit(FemuCtrl *n)
  */
 
 //由slba来获取对应地ppa结构，首先根据slba划分到zone，根据zone的范围确定对应的ppa
-static inline struct ppa* zns_get_ppa(NvmeNamespace *ns,uint64_t slba){
-
+static inline uint64_t zns_get_ppn(NvmeNamespace *ns,uint64_t slba){
+    FemuCtrl  *n=ns->ctrl;
+    uint32_t zidx= zns_zone_idx(ns,slba);
+    //目前zidx就对应着block号，每个block组成的line代表着一个zone
+    //动态版可能通过一个跳表来维护zone结构
+    //通过zone内偏移量来确定其他字段
+    uint64_t offset=slba%n->zone_size;
+    uint64_t ppa_base=n->zns->zone_table[zidx];
+    return ppa_base+offset;
 }
 //由slba首先获取到ppa结构然后转换为ppn
-static inline uint64_t zns_get_ppn(struct zns *zns, uint64_t slba){
-    struct ppa *supposed_ppa=zns_get_ppa(ns,slba);
-    struct ssdparams *spp= &zns->sp;
-    uint64_t ppn=supposed_ppa->g.
-
+static inline struct ppa* zns_get_ppa(struct zns *zns, uint64_t slba){
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    struct ppa * ppa = g_malloc(sizeof(struct ppa));
+    ppa->g.ch=ppn&0xFF;ppn>>=CH_BITS;
+    ppa->g.lun=(ppn&0xFF);ppn>>=LUN_BITS;
+    ppa->g.pl=(ppn&0xFFFF);ppn>>=PL_BITS;
+    ppa->g.pg=(ppn&0xFFFF);ppn>>=PG_BITS;
+    ppa->g.blk=(ppn&0x7FFF);ppn>>=BLK_BITS;
+    assert(ppn==0);
+    return ppa;
 }
-
 //根据slba来获取到ppa从而可以判定对应地page所在的channel
 static inline uint64_t zns_get_chnl_idx(NvmeNamespace *ns, uint64_t slba){
-    return (zns_get_ppn(ns,slba) % (ns->ctrl->zns->sp.nchnls));
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    return ppn&0xFF;
 }
 //计算相对lun id
 static inline uint64_t zns_get_lun_idx(NvmeNamespace *ns, uint64_t slba){
-    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
-    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    return (ppn>>CH_BITS)&0xFF;
 }
 
 //计算相对plane id
 static inline uint64_t zns_get_plane_idx(NvmeNamespace *ns, uint64_t slba){
-    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
-    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    return (ppn>>(CH_BITS+LUN_BITS))&0xFFFF;
 }
 
 //计算相对page id
 static inline uint64_t zns_get_page_idx(NvmeNamespace *ns, uint64_t slba){
-    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
-    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    return (ppn>>(CH_BITS+LUN_BITS+PL_BITS))&0xFFFF;
 }
 //计算相对block id
 static inline uint64_t zns_get_block_idx(NvmeNamespace *ns, uint64_t slba){
-    struct zns_ssdparams *spp = &(ns->ctrl->zns->sp);
-    return ( zns_get_ppn(ns,slba) % (spp->nchnls * spp->ways) );
+    uint64_t ppn=zns_get_ppn(ns,slba);
+    uint64_t block_id=(ppn>>(CH_BITS+LUN_BITS+PL_BITS+PG_BITS))&0x7FFF;
+#ifdef debug_mode
+    uint64_t zoneidx=zns_zone_idx(ns,slba);
+    assert(block_id==zoneidx);
+#endif
+    return block_id;
 }
 /**
  * 1-to-N model 一个zone包含多个channel的chip

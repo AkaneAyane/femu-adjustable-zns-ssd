@@ -22,10 +22,10 @@ enum {
 
 //当前模式下把64位的物理页地址进行如下的映射
 #define PG_BITS     (16)
-#define BLK_BITS    (16)
+#define BLK_BITS    (15)
 #define PL_BITS     (16)
 #define LUN_BITS    (8)
-#define CH_BITS     (7)
+#define CH_BITS     (8)
 
 /*用于描述一个物理页地址，随着物理页地址的变化，反而是channel先增加，符合channel的改变*/
 struct ppa {
@@ -36,7 +36,7 @@ struct ppa {
             uint64_t pl  : PL_BITS;
             uint64_t pg  : PG_BITS;
             uint64_t blk : BLK_BITS;
-            uint64_t rsv : 1;
+            uint64_t rsv :  1;
         } g;
         uint64_t ppa;
     };
