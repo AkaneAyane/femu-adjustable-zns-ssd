@@ -23,7 +23,8 @@ enum {
 //当前模式下把64位的物理页地址进行如下的映射
 #define PG_BITS     (16)
 #define BLK_BITS    (15)
-#define PL_BITS     (16)
+#define SEC_BITS    (8)
+#define PL_BITS     (8)
 #define LUN_BITS    (8)
 #define CH_BITS     (8)
 
@@ -31,6 +32,7 @@ enum {
 struct ppa {
     union {
         struct {
+            uint64_t sec : SEC_BITS;
             uint64_t ch  : CH_BITS;
             uint64_t lun : LUN_BITS;
             uint64_t pl  : PL_BITS;
@@ -98,10 +100,14 @@ struct zns_ssdparams{
     /* basic params*/
     int secsz;        /* sector size in bytes */
     int secs_per_pg;  /* # of sectors per page */
+    int secs_per_pg_log2;
     int pgs_per_blk;  /* # of NAND pages per block */
+    int pgs_per_blk_log2;
     int blks_per_pl;  /* # of blocks per plane */
     int pls_per_lun;  /* # of planes per LUN (Die) */
+    int pls_per_lun_log2;
     int luns_per_ch;  /* # of LUNs per channel */
+    int luns_per_ch_log2;  /* # of LUNs per channel */
 
     int secs_per_blk; /* # of sectors per block */
     int secs_per_pl;  /* # of sectors per plane */
@@ -111,6 +117,7 @@ struct zns_ssdparams{
 
     /* calculated values*/
     int pgs_per_pl;   /* # of pages per plane */
+    int pgs_per_pl_log2;
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
@@ -132,7 +139,7 @@ struct zns_ssdparams{
     /*zone info*/
     uint16_t register_model;    /* =1 single register =2 double register */
     uint64_t nchnls;            /* # of channels in the SSD */
-    uint64_t ways;              /* # of ways 每个channel in the SSD */
+    uint64_t nchnls_log2;
     uint64_t zones;             /* # of zones in ZNS SSD */
     uint64_t chnls_per_zone;    /* ZNS Association degree. # of zones per channel?, must be divisor of nchnls */
     uint64_t csze_pages;        /* #of Pages in Chip (Inhoinno:I guess lun in femu)*/
@@ -153,8 +160,8 @@ typedef struct zns {
     struct zns_ssdparams    sp;
     struct zns_ssd_channel *ch;
     struct zns_ssd_lun *chips;
-    //不再有page级别的映射表目前的实现会参考ZNS+采用FBG作为单位建立映射表？
-
+    //zone级别的ppn映射表,目前为固定的格式
+    uint64_t *zone_tables;
 
     /*new members for znsssd*/
     struct rte_ring **to_zone;

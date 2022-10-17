@@ -865,7 +865,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
-    uint64_t start_lpn = lba / spp->secs_per_pg;//也就是说lba是以section为单位的
+    uint64_t start_lpn = lba / spp->secs_per_pg;//也就是说lba是以sector为单位的
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
     struct ppa ppa;
     uint64_t lpn;

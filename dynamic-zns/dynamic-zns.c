@@ -1425,25 +1425,85 @@ static int zns_start_ctrl(FemuCtrl *n)
 
     return 0;
 }
+static int get_log2_base(int input){
+    if(input==0){
+        return 0;
+    }
+    int base=0;
+    while(input!=1){
+        input/=2;
+        base++;
+    }
+    return base;
+}
 static void znsssd_init_params(FemuCtrl * n, struct zns_ssdparams *spp){
+
+    //常规ssd参数设置
+    spp->secsz = 512;
+    spp->secs_per_pg = 8;   //page size : 4KB
+    spp->pgs_per_blk = 256; //block size : 1MB
+    spp->blks_per_pl = 32; //plane size = 32MB
+    spp->pls_per_lun = 16;   //lun size = 512MB
+    spp->luns_per_ch = 2;   //2way      >> 1 Inhoinno
+    spp->nchs = 16;         //ssd, 16GB
+
+    spp->pg_rd_lat = NAND_READ_LATENCY;
+    spp->pg_wr_lat = NAND_PROG_LATENCY;
+    spp->blk_er_lat = NAND_ERASE_LATENCY;
+    spp->ch_xfer_lat = 0;
+
+    /* calculated values */
+    spp->secs_per_blk = spp->secs_per_pg * spp->pgs_per_blk;
+    spp->secs_per_pl = spp->secs_per_blk * spp->blks_per_pl;
+    spp->secs_per_lun = spp->secs_per_pl * spp->pls_per_lun;
+    spp->secs_per_ch = spp->secs_per_lun * spp->luns_per_ch;
+    spp->tt_secs = spp->secs_per_ch * spp->nchs;
+
+    spp->pgs_per_pl = spp->pgs_per_blk * spp->blks_per_pl;
+    spp->pgs_per_lun = spp->pgs_per_pl * spp->pls_per_lun;
+    spp->pgs_per_ch = spp->pgs_per_lun * spp->luns_per_ch;
+    spp->tt_pgs = spp->pgs_per_ch * spp->nchs;
+
+    spp->blks_per_lun = spp->blks_per_pl * spp->pls_per_lun;
+    spp->blks_per_ch = spp->blks_per_lun * spp->luns_per_ch;
+    spp->tt_blks = spp->blks_per_ch * spp->nchs;
+
+    spp->pls_per_ch =  spp->pls_per_lun * spp->luns_per_ch;
+    spp->tt_pls = spp->pls_per_ch * spp->nchs;
+
+    spp->tt_luns = spp->luns_per_ch * spp->nchs;
+
+
+
+
+
+    //其他参数
     spp->pg_rd_lat = NAND_READ_LATENCY;
     spp->pg_wr_lat = NAND_PROG_LATENCY;
     spp->blk_er_lat = NAND_ERASE_LATENCY;
     spp->ch_xfer_lat = NAND_CHNL_PAGE_TRANSFER_LATENCY;
     spp->reset_count = 0;
     /**
-     * @brief Inhoinno : To show difference between 1-to-1 mapping, and 1-to-N mapping,
-     * at least one param among these four should be configured in zns ssd.
-     * 1. SSD size  2. zone size 3. # of chnls 4. # of chnls per zone
+     * 此处明确的体现了所谓的zone对多个channel的特点，假设说起初有nchnls为8，
+     * 那么chnls_per_zone也刻意地保持了为8,同时删除ways
     */
     spp->nchnls         = 8;           /* FIXME : = ZNS_MAX_CHANNEL channel configuration like this */
     spp->zones          = n->num_zones;
     spp->chnls_per_zone = 8;
-    spp->ways           = 2;
 
     /* TO REAL STORAGE SIZE */
     spp->csze_pages     = (((int64_t)n->memsz) * 1024 * 1024) / MIN_DISCARD_GRANULARITY / spp->nchnls / spp->ways;
     spp->nchips         = (((int64_t)n->memsz) * 1024 * 1024) / MIN_DISCARD_GRANULARITY / spp->csze_pages;//ways * nchnls
+
+
+
+    //对数参数取对数
+    spp->nchnls_log2 = get_log2_base(spp->nchnls);
+    spp->secs_per_pg_log2 = get_log2_base(spp->secs_per_pg);
+    spp->luns_per_ch_log2 = get_log2_base(spp->luns_per_ch);
+    spp->pgs_per_blk_log2 = get_log2_base(spp->pgs_per_blk);
+    spp->pgs_per_pl_log2 = get_log2_base(spp->pgs_per_pl);
+    spp->pls_per_lun_log2 = get_log2_base(spp->pls_per_lun);
 }
 
 /**
@@ -1475,7 +1535,14 @@ void znsssd_init(FemuCtrl * n){
     struct zns_ssdparams *spp = &zns->sp;
     zns->namespaces = n->namespaces;
     znsssd_init_params(n, spp);
-
+    /* initialize zns zone_tables映射 */
+    zns->zone_tables = g_malloc0(sizeof (uint64_t) * n->num_zones);
+    //这种计算法仍然考虑到了扇区
+    uint64_t base =0;
+    for(int i = 0; i< n->num_zones; i++){
+        zns->zone_tables[i]=base;
+        base+=n->zone_size;
+    }
     /* initialize zns ssd internal layout architecture */
     zns->ch     = g_malloc0(sizeof(struct zns_ssd_channel) * spp->nchnls);
     zns->chips  = g_malloc0(sizeof(struct zns_ssd_lun) * spp->nchips);
@@ -1521,102 +1588,75 @@ static void zns_exit(FemuCtrl *n)
  * 获取ssd 物理页地址
  */
 
-//由slba来获取对应地ppa结构，首先根据slba划分到zone，根据zone的范围确定对应的ppa
-static inline uint64_t zns_get_ppn(NvmeNamespace *ns,uint64_t slba){
-    FemuCtrl  *n=ns->ctrl;
-    uint32_t zidx= zns_zone_idx(ns,slba);
-    //目前zidx就对应着block号，每个block组成的line代表着一个zone
-    //动态版可能通过一个跳表来维护zone结构
-    //通过zone内偏移量来确定其他字段
-    uint64_t offset=slba%n->zone_size;
-    uint64_t ppa_base=n->zns->zone_table[zidx];
-    return ppa_base+offset;
+
+//由slba首先获取到ppa结构然后转换为ppn,注意每次使用完ppa都需要释放掉内存空间
+static inline struct ppa zns_get_ppa(struct zns *zns, uint64_t slba){
+    struct ppa PPA;
+    struct zns_ssdparams sp=zns->sp;
+    PPA.g.sec=(slba%sp.secs_per_pg)&0xFF; slba>>=sp.secs_per_pg_log2;
+    PPA.g.ch=(slba%sp.nchnls)&0xFF;slba>>=sp.nchnls_log2;
+    PPA.g.lun=(slba%sp.luns_per_ch&0xFF);slba>>=sp.luns_per_ch_log2;
+    PPA.g.pl=(slba%sp.pls_per_lun&0xFF);slba>>=sp.pls_per_lun_log2;
+    PPA.g.pg=(slba%sp.pgs_per_blk&0xFFFF);slba>>=sp.pgs_per_blk_log2;
+    PPA.g.blk=(slba&0x7FFF);
+    return PPA;
 }
-//由slba首先获取到ppa结构然后转换为ppn
-static inline struct ppa* zns_get_ppa(struct zns *zns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    struct ppa * ppa = g_malloc(sizeof(struct ppa));
-    ppa->g.ch=ppn&0xFF;ppn>>=CH_BITS;
-    ppa->g.lun=(ppn&0xFF);ppn>>=LUN_BITS;
-    ppa->g.pl=(ppn&0xFFFF);ppn>>=PL_BITS;
-    ppa->g.pg=(ppn&0xFFFF);ppn>>=PG_BITS;
-    ppa->g.blk=(ppn&0x7FFF);ppn>>=BLK_BITS;
-    assert(ppn==0);
-    return ppa;
+//注意此处的ppn与ppa中的值的区别，ppa描述的是ppa地址，但是需要能够快速映射到数组结构的方式从而方便的计算延时
+static inline uint64_t zns_get_pg_idx(NvmeNamespace *ns,uint64_t slba){
+    FemuCtrl  *n=ns->ctrl;
+    struct zns_ssdparams *spp=n->zns->sp;
+    struct ppa PPA= zns_get_ppa(n->zns,slba);
+    uint64_t pgidx=PPA.g.ch*spp->pgs_per_ch +
+            PPA.g.lun*spp->pgs_per_lun +
+            PPA.g.pl*spp->pgs_per_pl +
+            PPA.g.blk * spp->pgs_per_blk +
+            PPA.g.pg;
+    return pgidx;
 }
 //根据slba来获取到ppa从而可以判定对应地page所在的channel
 static inline uint64_t zns_get_chnl_idx(NvmeNamespace *ns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    return ppn&0xFF;
+    FemuCtrl  *n=ns->ctrl;
+    struct zns_ssdparams *spp=n->zns->sp;
+    struct ppa PPA= zns_get_ppa(n->zns,slba);
+    return PPA.g.ch;
 }
 //计算相对lun id
 static inline uint64_t zns_get_lun_idx(NvmeNamespace *ns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    return (ppn>>CH_BITS)&0xFF;
+    FemuCtrl  *n=ns->ctrl;
+    struct zns_ssdparams *spp=n->zns->sp;
+    struct ppa PPA= zns_get_ppa(n->zns,slba);
+    uint64_t lun_idx=PPA.g.ch*spp->luns_per_ch +
+            PPA.g.lun;
+    return lun_idx;
 }
 
 //计算相对plane id
 static inline uint64_t zns_get_plane_idx(NvmeNamespace *ns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    return (ppn>>(CH_BITS+LUN_BITS))&0xFFFF;
+    FemuCtrl  *n=ns->ctrl;
+    struct zns_ssdparams *spp=n->zns->sp;
+    struct ppa PPA= zns_get_ppa(n->zns,slba);
+    uint64_t pl_idx=PPA.g.ch*spp->pls_per_ch +
+                 PPA.g.lun*spp->pls_per_lun +
+                 PPA.g.pl;
+    return pl_idx;
 }
 
-//计算相对page id
-static inline uint64_t zns_get_page_idx(NvmeNamespace *ns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    return (ppn>>(CH_BITS+LUN_BITS+PL_BITS))&0xFFFF;
-}
 //计算相对block id
 static inline uint64_t zns_get_block_idx(NvmeNamespace *ns, uint64_t slba){
-    uint64_t ppn=zns_get_ppn(ns,slba);
-    uint64_t block_id=(ppn>>(CH_BITS+LUN_BITS+PL_BITS+PG_BITS))&0x7FFF;
+
+    FemuCtrl  *n=ns->ctrl;
+    struct zns_ssdparams *spp=n->zns->sp;
+    struct ppa PPA= zns_get_ppa(n->zns,slba);
+    uint64_t blk_idx=PPA.g.ch*spp->blks_per_ch +
+                PPA.g.lun*spp->blks_per_lun +
+                PPA.g.pl*spp->blks_per_pl+
+                PPA.g.blk;
 #ifdef debug_mode
     uint64_t zoneidx=zns_zone_idx(ns,slba);
     assert(block_id==zoneidx);
 #endif
-    return block_id;
-}
-/**
- * 1-to-N model 一个zone包含多个channel的chip
- */
-static inline uint64_t zns_get_multiway_ppn_idx(NvmeNamespace *ns, uint64_t slba){
-    FemuCtrl *n = ns->ctrl;
-    struct zns * zns = n->zns;
-    struct zns_ssdparams *spp = &zns->sp;
-    uint64_t zone_size = NVME_DEFAULT_ZONE_SIZE / MIN_DISCARD_GRANULARITY;
-    uint64_t degree = spp->chnls_per_zone;  // w.r.t 1-to-N mapping
-    uint64_t way    = spp->ways;
-    uint64_t zone_idx = zns_zone_idx(ns, slba);
-    uint64_t slpa = slba >> 3; //slba >> (22) << (19)
+    return blk_idx;
 
-    uint64_t b_iter         =zone_idx % (spp->nchnls / degree);
-    uint64_t b_iter_value   =spp->csze_pages * degree;
-    uint64_t b_mod          =(zone_idx * degree / spp->nchnls)*(zone_size/way/degree);
-    uint64_t base           =(b_iter * b_iter_value) + b_mod;
-
-    uint64_t iter           =(slpa / degree) % way;
-    uint64_t iter_value     =spp->csze_pages * spp->nchnls; //Inhoinno, Actually this is : spp->csze_pages * chips_per_row;
-    uint64_t mod            =(slpa % degree) * spp->csze_pages;
-    uint64_t mod_zpn        =(zone_idx > 0)? (slpa % (zone_idx*zone_size))/(degree * way) : slpa/(degree * way);
-
-    //femu_err("In zns_advanced_chnl_idx (zidx : %ld, zsz : %ld, spla : %ld) base(%ld)+ iter(%ld)*iter_value(%ld) + mod(%ld) = %ld \n",zone_idx,zone_size,slpa, base,iter,iter_value,mod,(base + iter*iter_value + mod));
-    // return ppa % nchnls
-    return (base + iter*iter_value + mod + mod_zpn);
-}
-
-static inline uint64_t zns_advanced_chnl_idx(NvmeNamespace *ns, uint64_t slba)
-{
-    FemuCtrl *n = ns->ctrl;
-    struct zns * zns = n->zns;
-    struct zns_ssdparams *spp = &zns->sp;
-    return zns_get_multiway_chip_idx(ns,slba) % spp->nchnls;
-}
-
-static inline uint64_t zns_get_multiway_chip_idx(NvmeNamespace *ns, uint64_t slba){
-    FemuCtrl *n = ns->ctrl;
-    struct zns * zns = n->zns;
-    struct zns_ssdparams *spp = &zns->sp;
-    return (zns_get_multiway_ppn_idx(ns,slba)/spp->csze_pages);
 }
 
 //定制写操作延时
