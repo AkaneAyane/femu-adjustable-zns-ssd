@@ -1536,11 +1536,13 @@ void znsssd_init(FemuCtrl * n){
     zns->namespaces = n->namespaces;
     znsssd_init_params(n, spp);
     /* initialize zns zone_tables映射 */
-    zns->zone_tables = g_malloc0(sizeof (uint64_t) * n->num_zones);
+    zns->zone_tables = g_malloc0(sizeof (zone_table_entry) * n->num_zones);
     //这种计算法仍然考虑到了扇区
     uint64_t base =0;
     for(int i = 0; i< n->num_zones; i++){
-        zns->zone_tables[i]=base;
+        zns->zone_tables[i].page_start=base;
+        zns->zone_tables[i].chnl_map=0xFFFF;
+        zns->zone_tables[i].block_size=n->zone_size/spp->secs_per_blk;
         base+=n->zone_size;
     }
     /* initialize zns ssd internal layout architecture */

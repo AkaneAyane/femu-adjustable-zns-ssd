@@ -92,6 +92,11 @@ typedef struct zns_ssd_channel {
     bool busy;
 }zns_ssd_channel;
 
+typedef struct zone_table_entry {
+    uint16_t chnl_map;
+    uint64_t page_start;
+    uint8_t block_size;
+}zone_table_entry;
 /*
  * @brief 
  * 与延迟模拟相关的zns-ssd 参数
@@ -161,7 +166,7 @@ typedef struct zns {
     struct zns_ssd_channel *ch;
     struct zns_ssd_lun *chips;
     //zone级别的ppn映射表,目前为固定的格式
-    uint64_t *zone_tables;
+    zone_table_entry *zone_tables;
 
     /*new members for znsssd*/
     struct rte_ring **to_zone;
