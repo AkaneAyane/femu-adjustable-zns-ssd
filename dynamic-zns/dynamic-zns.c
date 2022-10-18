@@ -1671,38 +1671,22 @@ static uint64_t znsssd_write(ZNS *zns, NvmeRequest *req){
     uint32_t my_chip_idx = 0;
     uint64_t nand_stime =0;
     uint64_t cmd_stime = (req->stime == 0) ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : req->stime ;
-#if ADVANCE_PER_CH_ENDTIME
     zns_ssd_channel *chnl =NULL;
     uint32_t my_chnl_idx = 0;
     uint64_t chnl_stime =0;
-#endif
 
 
     for (uint32_t i = 0; i<nlb ; i+=32){//mod qwj
         //Inhoinno : Interleaving per 16KB
         slba += i;
-#if SK_HYNIX_VALIDATION
-        my_chip_idx=hynix_zns_get_lun_idx(ns,slba); //SK Hynix
-#endif
-#if !(SK_HYNIX_VALIDATION)
-        my_chip_idx=zns_get_multiway_chip_idx(ns, slba);
-#endif
+        my_chip_idx= zns_get_lun_idx(ns,slba);
         chip = &(zns->chips[my_chip_idx]);
-#if !(ADVANCE_PER_CH_ENDTIME)
-        //Inhoinno:  Single thread emulation so assume we dont need lock per chnl
         nand_stime = (chip->next_avail_time < cmd_stime) ? cmd_stime : \
                      chip->next_avail_time;
         chip->next_avail_time = nand_stime + spp->pg_wr_lat;
         currlat= chip->next_avail_time - cmd_stime ; //Inhoinno : = T_channel + T_chip(=chnl->next_available_time) - stime; // FIXME like this
         maxlat = (maxlat < currlat)? currlat : maxlat;
-#endif
-#if ADVANCE_PER_CH_ENDTIME
-#if SK_HYNIX_VALIDATION
-        my_chnl_idx = hynix_zns_get_chnl_idx(ns, slba); //SK Hynix
-#endif
-#if !(SK_HYNIX_VALIDATION)
-        my_chnl_idx=zns_advanced_chnl_idx(ns, slba);
-#endif
+        my_chnl_idx = zns_get_chnl_idx(ns,slba);
         chnl = &(zns->ch[my_chnl_idx]);
         chnl_stime = (chnl->next_ch_avail_time < cmd_stime) ? cmd_stime : \
                      chnl->next_ch_avail_time;
@@ -1714,8 +1698,6 @@ static uint64_t znsssd_write(ZNS *zns, NvmeRequest *req){
         chip->next_avail_time = nand_stime + spp->pg_wr_lat;
         currlat = chip->next_avail_time - cmd_stime;
         maxlat = (maxlat < currlat)? currlat : maxlat;
-#endif
-
     }
     return maxlat;
 
@@ -1732,47 +1714,25 @@ static uint64_t znsssd_read(ZNS *zns, NvmeRequest *req){
     uint32_t my_chip_idx = 0;
     uint64_t nand_stime =0;
     uint64_t cmd_stime = (req->stime == 0) ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : req->stime ;
-#if ADVANCE_PER_CH_ENDTIME
     zns_ssd_channel *chnl =NULL;
     uint32_t my_chnl_idx = 0;
     uint64_t chnl_stime =0;
-#endif
-
-    for (uint64_t i = 0; i<nlb ; i+=32){//mod qwj
+    for (uint64_t i = 0; i<nlb ; i+=32){//这个地方如何考虑
         //Inhoinno : Interleaving per 16KB
         slba += i;
-#if SK_HYNIX_VALIDATION
-        my_chip_idx=hynix_zns_get_lun_idx(ns,slba); //SK Hynix
-#endif
-#if !(SK_HYNIX_VALIDATION)
-        my_chip_idx=zns_get_multiway_chip_idx(ns, slba);
-#endif
+        my_chip_idx=zns_get_lun_idx(ns, slba);
         chip = &(zns->chips[my_chip_idx]);
         //Inhoinno:  Single thread emulation so assume we dont need lock per chnl
-        if(chip->next_avail_time > cmd_stime)
-        {
 
-        }
-        else{
-
-        }
 
         nand_stime = (chip->next_avail_time < cmd_stime) ? cmd_stime : \
                      chip->next_avail_time;
-#if !(ADVANCE_PER_CH_ENDTIME)
 
         chip->next_avail_time = nand_stime + spp->pg_rd_lat;
         currlat= chip->next_avail_time - cmd_stime ; //Inhoinno : = T_channel + T_chip(=chnl->next_available_time) - stime; // FIXME like this
         maxlat = (maxlat < currlat)? currlat : maxlat;
-#endif
-#if ADVANCE_PER_CH_ENDTIME
-#if SK_HYNIX_VALIDATION
-        my_chnl_idx = hynix_zns_get_chnl_idx(ns, slba); //SK Hynix
-#endif
-#if !(SK_HYNIX_VALIDATION)
-        my_chnl_idx=zns_advanced_chnl_idx(ns, slba);
-#endif
 
+        my_chnl_idx = zns_get_chnl_idx(ns,slba);
         chnl = &(zns->ch[my_chnl_idx]);
 
         chip->next_avail_time = nand_stime + spp->pg_rd_lat;
@@ -1784,7 +1744,6 @@ static uint64_t znsssd_read(ZNS *zns, NvmeRequest *req){
 
         currlat = chnl->next_ch_avail_time - cmd_stime;
         maxlat = (maxlat < currlat)? currlat : maxlat;
-#endif
 
     }
     return maxlat;
@@ -1825,10 +1784,10 @@ static void *zns_thread(void *arg){
             //ftl_assert(req);
             switch (req->cmd.opcode) {
                 case NVME_CMD_WRITE:
-                    lat = znsssd_write(zns, req);
+                    lat = zns_advance_status(n,n->zns,&req->cmd,req);
                     break;
                 case NVME_CMD_READ:
-                    lat = znsssd_read(zns, req);
+                    lat = zns_advance_status(n,n->zns,&req->cmd,req);
                     break;
                 case NVME_CMD_DSM:
                     lat = 0;
